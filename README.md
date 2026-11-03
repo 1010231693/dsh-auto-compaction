@@ -1,5 +1,7 @@
 # dsh-auto-compaction
 
+<p align="center"><img src="docs/icon.png" width="120" height="120" alt="dsh-auto-compaction icon"></p>
+
 **一个对本地模型十分友好的会话自动压缩插件，压缩时不会触发本地模型重读历史，节约大量时间，压缩触发时机，压缩会话的保存内容可由用户自定义。**
 
 ![设置 → 会话压缩](docs/settings.png)
