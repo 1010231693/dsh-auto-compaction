@@ -1,6 +1,8 @@
 # dsh-auto-compaction
 
-**给 DeepSeek Harness 的空档期「交接式」上下文压缩。** 到阈值后不立刻动手，等 agent 回合结束，让模型按你的模板写一份交接文档，然后把整段历史替换成这一条消息——下一轮只剩系统提示词 + 工具定义 + 交接文档。
+**一个对本地模型十分友好的会话自动压缩插件，压缩时不会触发本地模型重读历史，节约大量时间，压缩触发时机，压缩会话的保存内容可由用户自定义。**
+
+![设置 → 会话压缩](docs/settings.png)
 
 - **无额外全量 prefill**：交接文档那一轮复用会话自己的前缀，命中 KV 缓存。
 - **不打断任务**：只在 `agent/status === idle` / `turn/end` 时执行。
@@ -9,7 +11,7 @@
 - **模板可编辑**：外置 Markdown 模板，每次压缩时读取，改完不用重启。
 - **设置页**：`设置 → 会话压缩`，滑条吸附 5%、数字框不吸附，保存即生效（边车文件）。
 
-> English: idle-time handoff compaction for DeepSeek Harness — at a configurable share of the usable input budget the plugin waits for an idle turn, writes a handoff checkpoint from the session's own cached prefix, and replaces the whole compactable surface with that single message.
+> English: a session auto-compaction plugin that is friendly to local models — compaction never makes the local engine re-read history, saving a lot of time; both the trigger point and the saved content of the compacted session are user-configurable.
 
 ## 组成
 

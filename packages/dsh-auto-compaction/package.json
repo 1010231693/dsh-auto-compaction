@@ -8,7 +8,7 @@
     "./lib/*": "./lib/*",
     "./package.json": "./package.json"
   },
-  "description": "Idle-time handoff compaction for DeepSeek Harness: at a context ratio, write a handoff checkpoint and replace the whole conversation with it.",
+  "description": "A session auto-compaction plugin that is friendly to local models: compaction never makes the local engine re-read history, saving a lot of time; the trigger point and the saved content of the compacted session are user-configurable.",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
