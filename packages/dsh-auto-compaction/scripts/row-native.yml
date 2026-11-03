@@ -1,0 +1,6 @@
+- id: compaction-basic
+  name: "@deepseek-ai/dsh-compaction-basic"
+  config:
+    auto: true
+    thresholdRatio: 0.9
+    headroomTokens: 20000

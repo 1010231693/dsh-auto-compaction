@@ -1,0 +1,44 @@
+{
+  "name": "dsh-auto-compaction",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./lib/*": "./lib/*",
+    "./package.json": "./package.json"
+  },
+  "description": "Idle-time handoff compaction for DeepSeek Harness: at a context ratio, write a handoff checkpoint and replace the whole conversation with it.",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1010231693/dsh-auto-compaction.git",
+    "directory": "packages/dsh-auto-compaction"
+  },
+  "homepage": "https://github.com/1010231693/dsh-auto-compaction#readme",
+  "bugs": {
+    "url": "https://github.com/1010231693/dsh-auto-compaction/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "compaction",
+    "context",
+    "handoff",
+    "llm",
+    "local-llm"
+  ],
+  "files": [
+    "lib",
+    "scripts",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

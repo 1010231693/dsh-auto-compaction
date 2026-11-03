@@ -1,0 +1,10 @@
+- id: compaction-basic
+  name: "dsh-auto-compaction"
+  config:
+    thresholdRatio: 0.9
+    headroomTokens: 10000
+    maxTokens: 8192
+    idleDelayMs: 1500
+    dryRun: false
+    presetId: lightweight-local
+    traceFile: "C:/Users/Me/.dsh-handoff-work/trace.log"
