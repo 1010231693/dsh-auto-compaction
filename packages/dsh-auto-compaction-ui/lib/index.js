@@ -13,9 +13,10 @@
  */
 import z from "@deepseek-ai/schemastery";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
+import { execFile, spawn } from "node:child_process";
 
 export const name = "dsh-auto-compaction-ui";
 export const inject = [];
@@ -32,6 +33,7 @@ const DIR = join(homedir(), ".dsh-handoff-compaction");
 const SETTINGS_FILE = join(DIR, "settings.json");
 const TEMPLATE_FILE = join(DIR, "template.md");
 const UI_LOG = join(DIR, "ui.log");
+const requireFromUi = createRequire(import.meta.url);
 
 function trace(message) {
   try { mkdirSync(DIR, { recursive: true }); appendFileSync(UI_LOG, new Date().toISOString() + " " + message + String.fromCharCode(10), "utf8"); } catch { /* ignore */ }
@@ -79,31 +81,90 @@ function launch(ctx, label, command, args) {
   }
 }
 
-function handleOpen(ctx, request, target) {
+async function handleOpen(ctx, request, target) {
   const trimmed = String(request ?? "").trim();
-  if (trimmed === "" || trimmed === lastOpenRequest) return;
+  if (trimmed === "" || trimmed === lastOpenRequest) return { ok: true, value: { skipped: true } };
   lastOpenRequest = trimmed;
   const mode = trimmed.startsWith("folder") ? "folder" : "file";
   const root = process.env.SystemRoot || "C:\\Windows";
   const explorerPath = join(root, "explorer.exe");
-  const cmdPath = join(root, "System32", "cmd.exe");
   const explorer = existsSync(explorerPath) ? explorerPath : "explorer.exe";
-  const cmd = existsSync(cmdPath) ? cmdPath : "cmd.exe";
 
-  trace("open requested mode=" + mode + " target=" + target + " explorer=" + explorer + " cmd=" + cmd);
-  const candidates = mode === "folder"
-    ? [[explorer, ["/select," + target]], [cmd, ["/c", "start", "", "/select," + target]]]
-    : [[cmd, ["/c", "start", "", target]], [explorer, [target]]];
+  trace("open requested mode=" + mode + " target=" + target + " explorer=" + explorer);
+  if (!existsSync(target)) {
+    const message = "file not found: " + target;
+    trace("open failed: " + message);
+    return { ok: false, error: { code: "auto-compaction/open-missing", message } };
+  }
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const pair = candidates[i];
-    const binary = pair[0];
-    if (binary.includes("\\") === false || existsSync(binary)) {
-      launch(ctx, mode + "/" + i, binary, pair[1]);
-      return;
+  // Launch through the existing Explorer shell. DSH's host runs plugin
+  // children in a job object; cmd/PowerShell descendants are killed with the
+  // request, while Explorer hands the file to the shell and exits.
+  const args = mode === "folder" ? ["/select," + target] : [target];
+  const ok = launch(ctx, mode + "/explorer", explorer, args);
+  return ok
+    ? { ok: true, value: { mode, target, opener: "explorer" } }
+    : { ok: false, error: { code: "auto-compaction/open-failed", message: "explorer failed to start" } };
+}
+
+function scopeScriptPath() {
+  try {
+    const entry = requireFromUi.resolve("dsh-auto-compaction");
+    return join(dirname(entry), "..", "scripts", "preset-scope.mjs");
+  } catch {
+    return join(homedir(), ".dsh-local-pkgs", "dsh-auto-compaction", "scripts", "preset-scope.mjs");
+  }
+}
+
+function execSwitchOnce(command, env, script) {
+  return new Promise((resolve, reject) => {
+    execFile(command, [script, "enable"], { timeout: 6000, windowsHide: true, env }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+/**
+ * Apply the current settings sidecar to the preset/profile YAML. `node` is the
+ * normal path; the Electron binary with ELECTRON_RUN_AS_NODE is the fallback
+ * when the host has no node on PATH.
+ */
+async function applyScopeSwitch() {
+  const script = scopeScriptPath();
+  if (!existsSync(script)) {
+    const message = "preset-scope.mjs not found: " + script;
+    trace("scope switch failed: " + message);
+    return { ok: false, message };
+  }
+  const explicit = process.env.DSH_NODE;
+  const attempts = typeof explicit === "string" && explicit.trim().length > 0
+    ? [{ command: explicit.trim(), env: process.env }]
+    : [
+      { command: "node", env: process.env },
+      { command: process.execPath, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } },
+    ];
+  let lastError;
+  for (const attempt of attempts) {
+    try {
+      const result = await execSwitchOnce(attempt.command, attempt.env, script);
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+      trace("scope switch ok" + (output ? " | " + output : ""));
+      return { ok: true, output };
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== "ENOENT") break;
     }
   }
-  trace("no launcher available for " + target);
+  const output = `${lastError?.stdout ?? ""}${lastError?.stderr ?? ""}`.trim();
+  const message = (lastError?.message ?? String(lastError)) + (output ? "\n" + output : "");
+  trace("scope switch failed: " + message);
+  return { ok: false, message };
 }
 
 const CHANNEL = "/dsh-auto-compaction";
@@ -134,7 +195,9 @@ function sanitize(payload) {
 export function apply(ctx, config = {}) {
   const seeded = normalize(config);
   if (readSettings() === undefined) writeSettings(ctx, seeded);
-  handleOpen(ctx, config.openTemplate, seeded.templateFile || TEMPLATE_FILE);
+  void handleOpen(ctx, config.openTemplate, seeded.templateFile || TEMPLATE_FILE).catch((error) => {
+    ctx.logger?.warn?.(`[handoff-ui] openTemplate failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 
   ctx.inject(["connection"], (scope) => {
     try {
@@ -145,17 +208,20 @@ export function apply(ctx, config = {}) {
       }
       const dispose = connection.rpc.handle(CHANNEL, async (endpoint, payload) => {
         try {
-          if (endpoint === "get") return { ok: true, value: readSettings() ?? seeded };
+          if (endpoint === "get") return { ok: true, value: { ...(readSettings() ?? seeded), defaultTemplate: TEMPLATE_FILE } };
           if (endpoint === "set") {
             const next = sanitize(payload);
             trace("set " + JSON.stringify(next));
             writeSettings(ctx, next);
-            return { ok: true, value: next };
+            const applied = await applyScopeSwitch();
+            if (!applied.ok) {
+              return { ok: false, error: { code: "auto-compaction/switch-failed", message: applied.message }, value: next };
+            }
+            return { ok: true, value: { ...next, switchApplied: true, defaultTemplate: TEMPLATE_FILE } };
           }
           if (endpoint === "open") {
             trace("open " + JSON.stringify(payload));
-            handleOpen(ctx, String(payload?.kind ?? "file") + ":" + Date.now(), String(payload?.path ?? "") || TEMPLATE_FILE);
-            return { ok: true, value: true };
+            return await handleOpen(ctx, String(payload?.kind ?? "file") + ":" + Date.now(), String(payload?.path ?? "") || TEMPLATE_FILE);
           }
           return { ok: false, error: { code: "auto-compaction/bad-request", message: "unknown endpoint: " + String(endpoint) } };
         } catch (error) {

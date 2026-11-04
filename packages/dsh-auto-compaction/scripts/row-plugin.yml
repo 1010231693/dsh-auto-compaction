@@ -7,4 +7,4 @@
     idleDelayMs: 1500
     dryRun: false
     presetId: lightweight-local
-    traceFile: "C:/Users/Me/.dsh-handoff-work/trace.log"
+    traceFile: ""

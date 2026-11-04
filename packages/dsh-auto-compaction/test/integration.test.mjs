@@ -47,6 +47,7 @@ export default class BasicCompactionEngine {
 }
 `);
 
+process.env.DSH_HANDOFF_SETTINGS_FILE = path.join(SANDBOX, "settings-missing.json");
 const { default: HandoffCompaction } = await import(pathToFileURL(path.join(SANDBOX, "lib", "index.js")).href);
 
 function makeCtx({ totalTokens, contextWindow = 250_000, defaultMaxTokens = 20_000 }) {
@@ -69,12 +70,13 @@ function makeCtx({ totalTokens, contextWindow = 250_000, defaultMaxTokens = 20_0
   return ctx;
 }
 
-function makeAgent({ model = "qwen3.8-flash-next", maxTokens = 20_000 } = {}) {
+function makeAgent({ model = "qwen3.8-flash-next", maxTokens = 20_000, reasoningEffort } = {}) {
+  const config = { provider: "qwen", model, maxTokens, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) };
   return {
     options: { provider: "qwen", model },
     session: {
       id: "session-test",
-      requestHeader: () => ({ config: { provider: "qwen", model, maxTokens } }),
+      requestHeader: () => ({ config }),
       toolHistory: () => [],
     },
   };
@@ -143,6 +145,32 @@ test("summarize replays the prefix and appends the handoff instruction", async (
   if (seen.maxTokens !== 4096) throw new Error("maxTokens not forwarded");
   if (seen.purpose !== "compaction") throw new Error("purpose not set");
   if (!Array.isArray(result.summary) || result.provider !== "qwen") throw new Error("bad summarize result");
+});
+
+test("summarize forwards the routed reasoning effort", async () => {
+  const ctx = makeCtx({ totalTokens: 0 });
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000, dryRun: true });
+  let seen;
+  ctx.llm.stream = async function* (options) { seen = options; yield { text: "## ok" }; };
+  const agent = makeAgent({ reasoningEffort: "xhigh" });
+  await plugin.summarize({ messages: [{ role: "user", content: "OLD" }] }, agent);
+  if (seen.reasoningEffort !== "xhigh") throw new Error("reasoningEffort not forwarded: " + JSON.stringify(seen.reasoningEffort));
+});
+
+test("summarize omits a foreign summary target's reasoning effort", async () => {
+  const ctx = makeCtx({ totalTokens: 0 });
+  const plugin = new HandoffCompaction(ctx, {
+    contextWindowOverride: 40_000,
+    dryRun: true,
+    summarizationProvider: "other",
+    summarizationModel: "summary-model",
+  });
+  let seen;
+  ctx.llm.stream = async function* (options) { seen = options; yield { text: "## ok" }; };
+  const agent = makeAgent({ reasoningEffort: "xhigh" });
+  await plugin.summarize({ messages: [{ role: "user", content: "OLD" }] }, agent);
+  if ("reasoningEffort" in seen) throw new Error("foreign summary target should not inherit the routed effort");
+  if (seen.provider !== "other" || seen.model !== "summary-model") throw new Error("wrong summary route");
 });
 
 let failed = 0;

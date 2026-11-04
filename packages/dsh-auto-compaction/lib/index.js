@@ -26,7 +26,9 @@ import { decideTrigger, shouldAttempt } from "./plan.js";
 const LOG = "[handoff]";
 
 const SETTINGS_DIR = join(homedir(), ".dsh-handoff-compaction");
-const SETTINGS_FILE = join(SETTINGS_DIR, "settings.json");
+// Test harnesses point this at a missing file so the live sidecar cannot leak
+// into a case that expects the configured ratio.
+const SETTINGS_FILE = process.env.DSH_HANDOFF_SETTINGS_FILE ?? join(SETTINGS_DIR, "settings.json");
 const DEFAULT_TEMPLATE_FILE = join(SETTINGS_DIR, "template.md");
 
 /**
@@ -328,6 +330,13 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       : undefined;
     const target = configured ?? latest ?? agentTarget;
     if (target === undefined) throw new Error("no provider/model available for the handoff summary");
+    // Replaying the prefix only reuses the provider cache when the auxiliary
+    // request carries the same routing knobs as the routed one. Strata writes
+    // the reasoning directive into the prefix, so a missing effort breaks the
+    // cache a few thousand tokens in. Only inherit it when the summary target
+    // is the same model that produced the latest request.
+    const sameTarget = latest !== undefined && target.provider === latest.provider && target.model === latest.model;
+    const reasoningEffort = sameTarget ? latest.reasoningEffort : undefined;
 
     const resolved = this.handoff.instruction === undefined
       ? readTemplate(this.handoff.templateFile, this.handoff.autoCreateTemplate)
@@ -349,6 +358,7 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       toolHistory: agent.session.toolHistory(),
       ...(input.tools === undefined ? {} : { tools: [...input.tools] }),
       maxTokens: this.config.maxTokens,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       sessionId: agent.session.id,
       purpose: "compaction",
       ...(signal === undefined ? {} : { signal }),

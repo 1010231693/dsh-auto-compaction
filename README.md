@@ -67,9 +67,11 @@
 
 ```bash
 node scripts/preset-scope.mjs status  [--preset <cordis.patch.yml>] [--all-local]
-node scripts/preset-scope.mjs enable
-node scripts/preset-scope.mjs disable
+node scripts/preset-scope.mjs enable   # 读取 settings.json，按勾选的预设逐一切换
+node scripts/preset-scope.mjs disable  # 全部恢复原生
 ```
+
+不带 `--preset/--all-local` 时，`enable` 默认读取 `~/.dsh-handoff-compaction/settings.json` 的 `scope` / `presets`：勾选的预设切到插件，其余可编辑预设恢复自身原生行；只有带 `# >>> handoff:slot` 标记的预设能被切换。
 
 ## 配置
 
@@ -80,7 +82,7 @@ node scripts/preset-scope.mjs disable
 | `~/.dsh-handoff-compaction/template.md` | 交接模板（缺失时按内置模板生成） |
 | `~/.dsh-handoff-compaction/ui.log` | 设置页 RPC 与「打开文件」诊断日志 |
 
-设置页支持「全局生效 / 按预设生效」：按预设时只对勾选且挂了本插件的预设生效；未勾选的预设保持默认配置。
+设置页支持「全局生效 / 按预设生效」：保存时 UI 会自动执行 `preset-scope.mjs enable`。按预设时，勾选的预设切到插件并关闭其原生压缩，其余可编辑预设恢复自身原生行；根级 `compaction-basic` 的 `auto:false` 守卫只在至少一个预设使用插件时写入。
 
 ## 与 DSH 原生压缩的关系
 

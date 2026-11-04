@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
       ok: "#3fb950",
     };
 
-    var DEFAULT_TEMPLATE = "C:\\Users\\Me\\.dsh-handoff-compaction\\template.md";
+    var DEFAULT_TEMPLATE = "~/.dsh-handoff-compaction/template.md";
     var PRESETS = [
       { id: "lightweight-local", label: "轻量本地" },
       { id: "lightweight-standard", label: "轻量标准" },
@@ -86,7 +86,7 @@ window.__ModuleLoader__.load({
       var scopePreset = base.scope === "preset";
       var presets = Array.isArray(base.presets) ? base.presets : [];
       var template = base.templateFile || "";
-      var shownTemplate = template === "" ? DEFAULT_TEMPLATE : template;
+      var defaultTemplate = base.defaultTemplate || DEFAULT_TEMPLATE;
 
       var budget = EXAMPLE_WINDOW - EXAMPLE_RESERVED;
       var ceiling = budget - EXAMPLE_HEADROOM;
@@ -119,18 +119,10 @@ window.__ModuleLoader__.load({
       function discard() { setDraft(settings); setStatus({ loading: false, error: "", saving: false, saved: false }); }
       function open(kind) {
         call(connection, "open", { kind: kind, path: template }).then(function () {
-          setStatus({ loading: false, error: "", saving: false, saved: true });
+          setStatus({ loading: false, error: "", saving: false, saved: false, note: "已打开" });
         }).catch(function (error) {
           setStatus({ loading: false, error: String(error && error.message || error), saving: false, saved: false });
         });
-      }
-      function copyPath() {
-        try {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(shownTemplate);
-            setStatus({ loading: false, error: "", saving: false, saved: true });
-          }
-        } catch (e) { /* ignore */ }
       }
 
       var rowStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "14px 0", borderBottom: "1px solid " + C.line };
@@ -150,7 +142,7 @@ window.__ModuleLoader__.load({
         h("div", { style: rowStyle },
           h("div", null,
             h("div", { style: labelStyle }, "生效范围"),
-            h("div", { style: subStyle }, scopePreset ? "仅勾选的预设使用这份设置，其余预设保持原生压缩" : "所有挂载了本插件的预设共用这份设置")
+            h("div", { style: subStyle }, scopePreset ? "仅勾选的预设切到插件并关闭其原生压缩；其余预设保持原生" : "所有带 handoff slot 的可编辑预设都切到插件，共用这份设置")
           ),
           h("div", { style: { display: "inline-flex", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
             seg(!scopePreset, "全局生效", function () { patch({ scope: "global" }); }),
@@ -205,11 +197,10 @@ window.__ModuleLoader__.load({
           h("div", { style: Object.assign({}, subStyle, { marginBottom: 8 }) }, "压缩时让模型按这份模板写交接文档；每次压缩时读取，改完不用重启。"),
           h("div", { style: { display: "flex", alignItems: "center", gap: 8, background: "#151619", border: "1px solid " + C.line, borderRadius: 8, padding: "7px 10px" } },
             h("input", {
-              value: template, placeholder: DEFAULT_TEMPLATE, "aria-label": "模板文件路径",
+              value: template, placeholder: defaultTemplate, "aria-label": "模板文件路径",
               onChange: function (e) { patch({ templateFile: e.target.value }); },
               style: { flex: 1, border: 0, background: "transparent", color: "#c9ced6", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 12, outline: "none" },
             }),
-            h("button", { type: "button", style: btnBase, onClick: copyPath }, "复制路径"),
             h("button", { type: "button", style: btnBase, onClick: function () { open("file"); } }, "打开文件"),
             h("button", { type: "button", style: btnBase, onClick: function () { open("folder"); } }, "所在文件夹")
           ),
@@ -231,7 +222,7 @@ window.__ModuleLoader__.load({
         h("div", { style: { display: "flex", alignItems: "center", gap: 10, marginTop: 14 } },
           h("button", { type: "button", style: dirty ? btnPrimary : Object.assign({}, btnBase, { opacity: 0.55 }), onClick: dirty ? save : undefined }, status.saving ? "保存中…" : "保存"),
           h("button", { type: "button", style: btnBase, onClick: discard }, "撤销改动"),
-          status.saved ? h("span", { style: { fontSize: 12, color: C.ok } }, "已保存，下次判定生效") : null,
+          status.note ? h("span", { style: { fontSize: 12, color: C.ok } }, status.note) : status.saved ? h("span", { style: { fontSize: 12, color: C.ok } }, "已保存，下次判定生效") : null,
           status.error ? h("span", { style: { fontSize: 12, color: "#e5534b" } }, status.error) : null
         )
       );
