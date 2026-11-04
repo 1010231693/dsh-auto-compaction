@@ -22,17 +22,36 @@ export const name = "dsh-auto-compaction-ui";
 export const inject = [];
 
 export const Config = z.object({
+  enabled: z.boolean().default(true),
   thresholdRatio: z.number().default(90),
   scopePreset: z.boolean().default(false),
   presets: z.string().default("lightweight-local"),
   templateFile: z.string().default(""),
   openTemplate: z.string().default(""),
+  displayStyle: z.string().default("orbit"),
 });
 
 const DIR = join(homedir(), ".dsh-handoff-compaction");
 const SETTINGS_FILE = join(DIR, "settings.json");
 const TEMPLATE_FILE = join(DIR, "template.md");
 const UI_LOG = join(DIR, "ui.log");
+const STATUS_DIR = process.env.DSH_HANDOFF_STATUS_DIR || join(DIR, "status");
+const STATUS_SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Read the engine's per-session status sidecar without importing the engine
+ * package: DSH's host module fallback cannot resolve a linked package from the
+ * UI package's real path, and a top-level import here blocks startup.
+ */
+function readStatus(sessionId) {
+  if (typeof sessionId !== "string" || !STATUS_SESSION_ID.test(sessionId)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(join(STATUS_DIR, sessionId + ".json"), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const requireFromUi = createRequire(import.meta.url);
 
 function trace(message) {
@@ -41,10 +60,17 @@ function trace(message) {
 
 let lastOpenRequest = "";
 
+const DISPLAY_STYLES = new Set(["orbit", "strip", "ring", "topbar"]);
+
+function normalizeDisplayStyle(value) {
+  return typeof value === "string" && DISPLAY_STYLES.has(value) ? value : "orbit";
+}
+
 function normalize(config) {
   const raw = Number(config.thresholdRatio ?? 90);
   const pct = Number.isFinite(raw) ? Math.max(1, Math.min(100, raw)) : 90;
   return {
+    enabled: config.enabled !== false,
     thresholdRatio: pct / 100,
     scope: config.scopePreset === true ? "preset" : "global",
     presets: String(config.presets ?? "")
@@ -52,6 +78,7 @@ function normalize(config) {
       .map((part) => part.trim())
       .filter((part) => part.length > 0),
     templateFile: String(config.templateFile ?? "").trim(),
+    displayStyle: normalizeDisplayStyle(config.displayStyle),
   };
 }
 
@@ -185,10 +212,12 @@ function sanitize(payload) {
     ? payload.presets.filter((v) => typeof v === "string" && v.trim().length > 0)
     : String(payload?.presets ?? "").split(/[,，s]+/).filter((v) => v.trim().length > 0);
   return {
+    enabled: payload?.enabled !== false,
     thresholdRatio: ratio / 100,
     scope: payload?.scope === "preset" ? "preset" : "global",
     presets,
     templateFile: String(payload?.templateFile ?? "").trim(),
+    displayStyle: normalizeDisplayStyle(payload?.displayStyle),
   };
 }
 
@@ -208,7 +237,24 @@ export function apply(ctx, config = {}) {
       }
       const dispose = connection.rpc.handle(CHANNEL, async (endpoint, payload) => {
         try {
-          if (endpoint === "get") return { ok: true, value: { ...(readSettings() ?? seeded), defaultTemplate: TEMPLATE_FILE } };
+          if (endpoint === "status") {
+            // A switched-off plugin leaves no live status behind; hide any
+            // sidecar left over from a compaction that ran before the switch.
+            if (readSettings()?.enabled === false) return { ok: true, value: null };
+            return { ok: true, value: readStatus(String(payload?.sessionId ?? "")) ?? null };
+          }
+          if (endpoint === "get") {
+            const stored = readSettings() ?? seeded;
+            return {
+              ok: true,
+              value: {
+                ...stored,
+                enabled: stored.enabled !== false,
+                displayStyle: normalizeDisplayStyle(stored.displayStyle),
+                defaultTemplate: TEMPLATE_FILE,
+              },
+            };
+          }
           if (endpoint === "set") {
             const next = sanitize(payload);
             trace("set " + JSON.stringify(next));

@@ -11,6 +11,10 @@
 - **比例语义单调**：比例作用于「可用输入预算 = 窗口 − 输出预留」，再受 headroom 封顶，0–100% 全程有效。
 - **历史可回滚**：走 DSH 自己的压缩事务（`surfaceOp: replace`），旧消息留在会话日志里，rewind 仍可撤回。
 - **模板可编辑**：外置 Markdown 模板，每次压缩时读取，改完不用重启。
+- **压缩可见**：压缩期间显示状态提示（阶段、已用时间、排队提示），完成/失败有收尾提示。
+- **进度样式可选**：设置页的「压缩显示方式」可选轨道环（默认）、输入区状态条、中央进度环、顶部加载条；保存后下一次压缩生效。
+- **摘要完整**：按模板校验小节；缺节先续写、再重写，仍不完整就放弃提交，不会把「（截断）」的稿子替换进历史。
+- **可随时停用**：设置页顶部的「启用插件」开关关闭后，压缩立即交回 DSH 原生实现（自动阈值与 `/compact` 都是原生摘要），无需重启、不卸载插件。
 - **设置页**：`设置 → 会话压缩`，滑条吸附 5%、数字框不吸附，保存即生效（边车文件）。
 
 > English: a session auto-compaction plugin that is friendly to local models — compaction never makes the local engine re-read history, saving a lot of time; both the trigger point and the saved content of the compacted session are user-configurable.
@@ -27,7 +31,7 @@
 ## 它是怎么压缩的
 
 1. 到阈值后**不立即动手**，等 agent 结束当前回合（`agent/status idle` 或 `turn/end`）。
-2. 用会话自己的前缀（命中缓存）让模型按模板写交接文档 —— 不额外全量 prefill。
+2. 用会话自己的前缀（命中缓存）让模型按模板写交接文档 —— 不额外全量 prefill；缺小节或模型自己标注「截断」时，先续写、再重写。
 3. 通过 DSH 的压缩事务把整段历史替换成这一条消息；旧消息仍在会话日志里，rewind 可回滚。
 4. 下一轮上下文只剩 系统提示词 + 工具定义 + 交接文档。
 
@@ -55,7 +59,7 @@
      config:
        thresholdRatio: 0.9
        headroomTokens: 10000
-       maxTokens: 8192
+       maxTokens: 12288
        idleDelayMs: 1500
        presetId: <preset id>
    ```
@@ -84,9 +88,14 @@ node scripts/preset-scope.mjs disable  # 全部恢复原生
 
 设置页支持「全局生效 / 按预设生效」：保存时 UI 会自动执行 `preset-scope.mjs enable`。按预设时，勾选的预设切到插件并关闭其原生压缩，其余可编辑预设恢复自身原生行；根级 `compaction-basic` 的 `auto:false` 守卫只在至少一个预设使用插件时写入。
 
+`enabled`（默认 `true`）是设置页顶部的开关：引擎每次判定都读取，写盘后下一次判定即生效。关闭时引擎不再挂交接文档，把 `compactIfNeeded` / `summarize` / `compactNow` 全部交回 `@deepseek-ai/dsh-compaction-basic`，即 DSH 原生压缩；设置页同时也隐藏状态提示。
+
 ## 与 DSH 原生压缩的关系
 
-一个上下文只能有一个 `ctx.compaction` 提供者，所以「关掉原生压缩」体现为预设里那一行指向谁。切回原生：
+两种回到原生的方式：
+
+- **软开关（推荐，无需重启）**：设置页关闭「启用插件」。预设行仍指向插件，但引擎把自己的自动触发、交接模板和状态边车都交回原生实现；手动 `/compact` 也走原生摘要。
+- **硬切换（整行换回，需重启 DSH）**：
 
 ```bash
 node scripts/preset-scope.mjs disable   # 恢复 @deepseek-ai/dsh-compaction-basic + auto: true

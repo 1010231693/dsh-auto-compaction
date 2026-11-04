@@ -22,8 +22,19 @@ import { join } from "node:path";
 import { BlockAssembler, LlmError, contentHasImage } from "@deepseek-ai/dsh-llm";
 import BasicCompactionEngine from "@deepseek-ai/dsh-compaction-basic";
 import { decideTrigger, shouldAttempt } from "./plan.js";
+import { writeStatus } from "./status.js";
+import {
+  continuationInstruction,
+  expectedSections,
+  looksTruncated,
+  mergeSummary,
+  rewriteInstruction,
+  stripTruncationMarkers,
+  validateSummary,
+} from "./summary.js";
 
 const LOG = "[handoff]";
+const MAX_SUMMARY_ATTEMPTS = 3;
 
 const SETTINGS_DIR = join(homedir(), ".dsh-handoff-compaction");
 // Test harnesses point this at a missing file so the live sidecar cannot leak
@@ -126,6 +137,22 @@ function finishError(finish) {
   }
 }
 
+function mergeUsage(left, right) {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  const merged = { ...left };
+  for (const key of Object.keys(right)) {
+    const value = right[key];
+    if (typeof value === "number" && typeof merged[key] === "number") merged[key] += value;
+    else if (merged[key] === undefined) merged[key] = value;
+  }
+  return merged;
+}
+
+function errorCodeOf(error) {
+  return error !== null && typeof error === "object" && typeof error.code === "string" ? error.code : "";
+}
+
 export default class HandoffCompaction extends BasicCompactionEngine {
   static inject = ["llm", "tokenMeter", "sessions"];
 
@@ -171,9 +198,10 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       autoCreateTemplate,
       ...base
     } = config;
-    // auto:false keeps the stock between-step pressure trigger out of the way;
-    // this backend decides on idle instead.
-    super(ctx, { ...base, auto: false });
+    // The stock trigger is registered so the plugin switch can hand compaction
+    // back to the native engine live; compactIfNeeded() suppresses it while the
+    // handoff path is enabled.
+    super(ctx, { ...base, auto: true });
     this.handoff = {
       instruction: typeof handoffInstruction === "string" && handoffInstruction.trim().length > 0 ? handoffInstruction : undefined,
       contextWindowOverride: contextWindowOverride ?? 0,
@@ -213,6 +241,26 @@ export default class HandoffCompaction extends BasicCompactionEngine {
     return `${Math.round((this.config.thresholdRatio ?? 0.9) * 100)}%`;
   }
 
+  /**
+   * Settings switch. Missing settings or a missing field keeps the plugin on;
+   * only an explicit `enabled: false` hands compaction back to the stock engine.
+   */
+  handoffEnabled() {
+    const live = readSettings();
+    return !(live !== undefined && live.enabled === false);
+  }
+
+  /**
+   * The base registers its between-step pressure / overflow triggers whenever
+   * `auto` is on. While the handoff path is enabled they must stay inert, so
+   * the plugin still only compacts from its idle gate. Disabled: delegate, and
+   * DSH's native compaction behaves exactly as without the plugin.
+   */
+  async compactIfNeeded(agent, trigger, signal) {
+    if (this.handoffEnabled()) return null;
+    return super.compactIfNeeded(agent, trigger, signal);
+  }
+
   log(message, level = "info") {
     const line = `${new Date().toISOString()} ${LOG} ${message}`;
     if (this.handoff?.traceConsole === true) {
@@ -248,6 +296,7 @@ export default class HandoffCompaction extends BasicCompactionEngine {
 
   async checkAndHandoff(agent, why = "idle") {
     if (this.running.has(agent)) return;
+    if (!this.handoffEnabled()) return;
     try {
       const session = agent.session;
       if (!session) return;
@@ -303,24 +352,123 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       }
 
       this.running.add(agent);
+      writeStatus(session.id, {
+        phase: "running",
+        step: "prepare",
+        startedAt: Date.now(),
+        totalTokens: measurement.totalTokens,
+        thresholdTokens: decision.thresholdTokens,
+        contextWindow,
+        timeoutMs: this.handoff.timeoutMs,
+        provider: target.provider,
+        model: target.model,
+      });
       try {
         const result = await this.compactNow(agent, AbortSignal.timeout(this.handoff.timeoutMs));
         if (result === null || result === undefined) {
+          writeStatus(session.id, {
+            phase: "done",
+            step: "done",
+            completedAt: Date.now(),
+            shadowedNodes: 0,
+            shadowedTokens: 0,
+            note: "no compactable range",
+          });
           this.log("idle: no compactable range; nothing replaced", "warn");
           return;
         }
+        writeStatus(session.id, {
+          phase: "done",
+          step: "done",
+          completedAt: Date.now(),
+          shadowedNodes: result.shadowedSeqs.length,
+          shadowedTokens: result.shadowedTokenCount,
+          missingSections: [],
+          retrying: false,
+        });
         this.log(`committed: replaced ${result.shadowedSeqs.length} node(s) (~${result.shadowedTokenCount} tokens) with the handoff checkpoint`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        writeStatus(agent.session?.id, {
+          phase: "failed",
+          step: "failed",
+          failedAt: Date.now(),
+          error: message,
+          errorCode: errorCodeOf(error),
+        });
+        throw error;
       } finally {
         this.running.delete(agent);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      writeStatus(agent.session?.id, {
+        phase: "failed",
+        step: "failed",
+        failedAt: Date.now(),
+        error: message,
+        errorCode: errorCodeOf(error),
+      });
       this.log(`failed: ${message}`, "warn");
+    }
+  }
+
+  /**
+   * Wrap the stock transaction so manual /compact and automatic idle
+   * compaction share the same status sidecar. The base method still owns the
+   * surface lock, summarization and commit.
+   */
+  async compactNow(agent, signal, sourceCommandId) {
+    // Manual /compact while the plugin is off stays a stock native compaction:
+    // no handoff template, no plugin status sidecar.
+    if (!this.handoffEnabled()) return super.compactNow(agent, signal, sourceCommandId);
+    const sessionId = agent?.session?.id;
+    let totalTokens;
+    try { totalTokens = this.ctx.tokenMeter.measure(agent.session).totalTokens; } catch { totalTokens = undefined; }
+    writeStatus(sessionId, {
+      phase: "running",
+      step: "prepare",
+      startedAt: Date.now(),
+      timeoutMs: this.handoff.timeoutMs,
+      ...(typeof totalTokens === "number" ? { totalTokens } : {}),
+      retrying: false,
+      writing: false,
+      missingSections: [],
+      error: "",
+      errorCode: "",
+    });
+    try {
+      const result = await super.compactNow(agent, signal, sourceCommandId);
+      writeStatus(sessionId, {
+        phase: "done",
+        step: "done",
+        completedAt: Date.now(),
+        shadowedNodes: Array.isArray(result?.shadowedSeqs) ? result.shadowedSeqs.length : 0,
+        shadowedTokens: typeof result?.shadowedTokenCount === "number" ? result.shadowedTokenCount : 0,
+        missingSections: [],
+        retrying: false,
+        writing: false,
+        ...(result === null || result === undefined ? { note: "no compactable range" } : {}),
+      });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      writeStatus(sessionId, {
+        phase: "failed",
+        step: "failed",
+        failedAt: Date.now(),
+        error: message,
+        errorCode: errorCodeOf(error),
+      });
+      throw error;
     }
   }
 
   /** Handoff template instead of the stock compaction instruction. */
   async summarize(input, agent, signal) {
+    // Native pressure/overflow compaction runs through this same hook, so the
+    // stock prompt must come back the moment the plugin is switched off.
+    if (!this.handoffEnabled()) return super.summarize(input, agent, signal);
     const latest = agent.session.requestHeader?.()?.config;
     const configured = this.config.summarizationProvider && this.config.summarizationModel
       ? { provider: this.config.summarizationProvider, model: this.config.summarizationModel }
@@ -346,15 +494,14 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       : BUILTIN_INSTRUCTION;
     this.log(`template: ${resolved.source}${resolved.text === undefined ? " (fallback)" : ""}`);
 
-    const assembler = new BlockAssembler();
-    const messages = [
+    const expected = expectedSections(instruction);
+    const baseMessages = [
       ...input.messages,
       Object.freeze({ role: "user", content: [{ type: "text", text: instruction }] }),
     ];
-    const options = {
+    const baseOptions = {
       provider: target.provider,
       model: target.model,
-      messages,
       toolHistory: agent.session.toolHistory(),
       ...(input.tools === undefined ? {} : { tools: [...input.tools] }),
       maxTokens: this.config.maxTokens,
@@ -363,24 +510,141 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       purpose: "compaction",
       ...(signal === undefined ? {} : { signal }),
     };
+    const sessionId = agent.session?.id;
 
-    for await (const chunk of this.ctx.llm.stream(options)) assembler.push(chunk);
-    const error = finishError(assembler.finish);
-    if (error !== undefined) throw error;
+    let combined = "";
+    let rawOutput = [];
+    let usage;
+    let validation = {
+      ok: expected.length === 0,
+      missing: [...expected],
+      truncated: false,
+      endsWithHeading: false,
+      reason: "not attempted",
+    };
+    const attempts = [];
 
-    const rawOutput = assembler.blocks();
-    if (contentHasImage(rawOutput)) throw new LlmError("handoff summary cannot contain image output", "UNSUPPORTED_CONTENT");
-    const summary = rawOutput.filter((block) => block.type === "text");
-    if (!summary.some((block) => block.text.trim().length > 0)) throw new Error("handoff summary produced no text content");
+    let liveTotalTokens;
+    try { liveTotalTokens = this.ctx.tokenMeter.measure(agent.session).totalTokens; } catch { liveTotalTokens = undefined; }
+    writeStatus(sessionId, {
+      phase: "running",
+      step: "summary",
+      summaryAttempt: 1,
+      retrying: false,
+      writing: false,
+      missingSections: [],
+      ...(typeof liveTotalTokens === "number" ? { totalTokens: liveTotalTokens } : {}),
+    });
+
+    for (let attempt = 1; attempt <= MAX_SUMMARY_ATTEMPTS; attempt += 1) {
+      signal?.throwIfAborted?.();
+      const messages = attempt === 1
+        ? baseMessages
+        : attempt === 2
+          ? [
+            ...baseMessages,
+            Object.freeze({ role: "assistant", content: [{ type: "text", text: combined }] }),
+            Object.freeze({ role: "user", content: [{ type: "text", text: continuationInstruction(validation) }] }),
+          ]
+          : [
+            ...baseMessages,
+            Object.freeze({
+              role: "user",
+              content: [{ type: "text", text: rewriteInstruction(validation, this.config.maxTokens) }],
+            }),
+          ];
+
+      const result = await this.runSummaryRequest(baseOptions, messages);
+      const truncatedNow = looksTruncated(result.text);
+      const clean = stripTruncationMarkers(result.text);
+      combined = attempt === 1
+        ? clean
+        : attempt === 2
+          ? mergeSummary(combined, clean)
+          : clean;
+      rawOutput = result.rawOutput;
+      usage = mergeUsage(usage, result.usage);
+      validation = validateSummary(combined, expected);
+      if (truncatedNow) {
+        validation = {
+          ...validation,
+          ok: false,
+          truncated: true,
+          reason: validation.reason.length > 0 ? `${validation.reason}; truncation marker` : "truncation marker",
+        };
+      }
+      attempts.push({
+        attempt,
+        finish: result.finishKind,
+        chars: result.text.length,
+        ok: validation.ok,
+      });
+      if (validation.ok) break;
+      if (attempt < MAX_SUMMARY_ATTEMPTS) {
+        const next = attempt + 1;
+        this.log(`summary incomplete after attempt ${attempt}: ${validation.reason}; ${attempt === 1 ? "continuing" : "rewriting"}`);
+        writeStatus(sessionId, {
+          phase: "running",
+          step: "summary",
+          summaryAttempt: next,
+          retrying: true,
+          writing: next === MAX_SUMMARY_ATTEMPTS,
+          missingSections: validation.missing,
+          summaryChars: combined.length,
+          summaryAttempts: attempts,
+        });
+      }
+    }
+
+    if (!validation.ok) {
+      const error = new Error(`handoff summary incomplete after ${attempts.length} attempt(s): ${validation.reason}`);
+      error.code = "INCOMPLETE_SUMMARY";
+      error.attempts = attempts;
+      throw error;
+    }
+
+    const finalText = combined.trim();
+    if (finalText.length === 0) throw new Error("handoff summary produced no text content");
+    writeStatus(sessionId, {
+      phase: "running",
+      step: "commit",
+      summaryAttempt: attempts.length,
+      retrying: false,
+      writing: false,
+      missingSections: [],
+      summaryChars: finalText.length,
+      summaryAttempts: attempts,
+    });
 
     return {
-      summary,
+      summary: [{ type: "text", text: finalText }],
       rawOutput,
       llmStreamCall: true,
       provider: target.provider,
       model: target.model,
       maxTokens: this.config.maxTokens,
-      ...(assembler.usage === undefined ? {} : { usage: assembler.usage }),
+      ...(usage === undefined ? {} : { usage }),
+    };
+  }
+
+  /** One summary LLM call; max-tokens is returned as a partial, not thrown. */
+  async runSummaryRequest(baseOptions, messages) {
+    const assembler = new BlockAssembler();
+    for await (const chunk of this.ctx.llm.stream({ ...baseOptions, messages })) assembler.push(chunk);
+    const finish = assembler.finish ?? { kind: "stop" };
+    if (finish.kind === "error" || finish.kind === "aborted") {
+      const error = finishError(finish);
+      if (error !== undefined) throw error;
+    }
+    const rawOutput = assembler.blocks();
+    if (contentHasImage(rawOutput)) throw new LlmError("handoff summary cannot contain image output", "UNSUPPORTED_CONTENT");
+    const text = rawOutput.filter((block) => block.type === "text").map((block) => block.text).join("");
+    if (text.trim().length === 0) throw new Error("handoff summary produced no text content");
+    return {
+      rawOutput,
+      text,
+      finishKind: finish.kind,
+      usage: assembler.usage,
     };
   }
 }

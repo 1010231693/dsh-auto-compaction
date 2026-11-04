@@ -360,7 +360,10 @@ for (const entry of plan) {
       : current === "@deepseek-ai/dsh-compaction-basic" ? "DSH 原生压缩"
       : "未知";
     const selected = entry.selected === undefined ? "" : `\n  勾选: ${entry.selected ? "是（插件）" : "否（原生）"}`;
-    console.log(`${file}\n  当前: ${current}\n  含义: ${kind}${selected}\n  YAML: ${validatePreset(original)}`);
+    const switchLine = readSettings()?.enabled === false
+      ? "\n  开关: 已停用（设置页关闭，运行时压缩交回原生行为）"
+      : "\n  开关: 启用";
+    console.log(`${file}\n  当前: ${current}\n  含义: ${kind}${selected}${switchLine}\n  YAML: ${validatePreset(original)}`);
     continue;
   }
 
