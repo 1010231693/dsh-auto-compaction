@@ -6,9 +6,11 @@
  * At a configurable share of the model window (default 90%) this backend waits
  * for the agent to go idle, then asks the routed model — replaying the current
  * conversation as the prompt prefix so the provider's cache is reused — for a
- * handoff checkpoint, and replaces the whole compactable surface with that one
- * message. The next user turn therefore starts from system prompt + tools +
- * handoff text, and nothing else.
+ * handoff checkpoint, and replaces the oldest compactable span with that one
+ * message. Selection comes from the stock backend, so a recent tail is kept
+ * verbatim (retainRatio 0.16 of the window by default) and the cut never splits
+ * a tool-call from its result; only the head of the history becomes the
+ * checkpoint.
  *
  * It subclasses the stock basic backend so selection, tool-pair balance,
  * durable compaction markers, flushes and the idle admission reservation are
@@ -85,41 +87,40 @@ function readTemplate(filePath, autoCreate) {
 
 
 const BUILTIN_INSTRUCTION = [
-  "你现在要为本会话写一份交接文档：我会用它替换掉上面的全部对话记录，然后由你在一个空白的上下文里继续同一件事。写漏的东西将永久丢失。",
+  "你现在充当这个 AI 编程助手的压缩引擎。请把上面的对话压缩成一份结构化检查点，让另一个模型能在不丢失关键上下文的前提下接手继续这项工作。",
   "",
-  "只输出 Markdown，严格按下面小节顺序，每节用短横线要点，不许省略任何小节；没有内容写「（无）」。",
+  "严格按下面给出的 Markdown 结构输出：每个小节都要保留，顺序不要变。用简短的要点，不要写成成段的散文。空的小节写「（无）」——绝不允许删掉某个小节。",
   "",
-  "## 用户目标与原始要求",
-  "- 用户最初想做什么、之后怎么改过口；关键原话逐字引用",
+  "## 用户主要请求与意图",
+  "- [用户的原始目标以及后来的演变；措辞要紧之处逐字引用]",
   "",
-  "## 当前任务状态",
-  "- 在做什么、进行到哪一步、哪些已完成、哪些没完成",
+  "## 关键技术概念",
+  "- [当前涉及的技术、框架、模式与约定]",
   "",
-  "## 涉及的文件与代码",
-  "- 精确路径：为什么重要、改了什么、还有哪里没改",
+  "## 文件与代码",
+  "- [精确路径：为什么重要，关键改动或代码片段]",
   "",
-  "## 已验证的事实与命令",
-  "- 跑过的命令、测试结果、报错原文、环境约束（版本、端口、路径）",
+  "## 报错与修复",
+  "- [错误：是怎么解决的，以及与之相关的用户反馈]",
   "",
-  "## 关键决策与被放弃的方案",
-  "- 选了什么、为什么；试过但放弃的方案及放弃原因",
+  "## 未完成的任务",
+  "- [明确要求过但尚未完成的工作]",
   "",
-  "## 待办与下一步",
-  "- 用户明确要求但尚未完成的项；紧接着要执行的第一步",
+  "## 当前工作",
+  "- [在这个检查点上具体正在做什么]",
   "",
-  "## 风险与注意事项",
-  "- 容易踩的坑、用户的偏好与禁忌",
+  "## 下一步",
+  "- [紧接的单个动作，须与最近一次请求直接对齐；没有则写「（无）」]",
+  "",
+  "## 关键上下文",
+  "- [决策及其理由、约束条件、用户偏好、尚未解决的问题、继续所需的资料]",
   "",
   "规则：",
-  "- 保留精确的路径、命令、错误串、标识符、数值、函数签名；不要概括成\"修改了相关文件\"这类废话。",
-  "- 如果对话里有用户粘贴的长文档或上一轮交接文档（例如包在 <compacted-summary> 标记里的那份），不要原样照抄：保留仍然生效的硬约束（路径、命令、版本、验收标准）并逐字引用其关键句，其余概括；过时的内容删掉，最终只输出一份同样结构的文档。",
-  "- 如果用户的早期消息给出了一份磁盘上的工程交接文档的绝对路径，必须逐字保留该路径并注明\"需要时重新读取该文件\"；不要把它的内容当成必须在本文档里复述的东西。",
-  "- 不要提到这份交接文档本身，也不要说上下文被压缩或摘要。",
-  "- 只输出文档正文，不要调用任何工具。",
-  "",
-  "写入时还要记住下面两条，它们会被交给后续的你执行：",
-  "- 更早的对话消息不会留在你的上下文里，也没有任何工具或磁盘检索能把它们找回来。不要去搜索会话文件、日志或历史记录还原旧对话；文档里没写的，就当作不知道，直接说不知道。",
-  "- 用户问起\"之前说过什么\"时，以本文档为准；文档没有逐字保留的内容（例如旧回答的原文），直接说明已经被压缩掉，不要编造，也不要为了找它去翻文件。",
+  "- 用简洁的中文工程表述书写。精确保留文件路径、命令、报错串、标识符、数值、函数签名与语法片段。",
+  "- 忠实保留用户的反馈与明确指令，尤其是纠正。",
+  "- 不要提到本摘要请求，也不要说上下文被压缩过。",
+  "- 只输出检查点正文：不要调用任何工具，也不要执行任何其他动作。",
+  "- 如果对话里已经含有 <compacted-summary> 块，那是一份 PRIOR 检查点。不要把它逐字抄到新的摘要里：保留仍然成立的事实，删掉过时的，并把更新的信息按同样的结构合并进这一份摘要。",
 ].join("\n");
 
 function finishError(finish) {

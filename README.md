@@ -34,8 +34,8 @@
 
 1. 到阈值后**不立即动手**，等 agent 结束当前回合（`agent/status idle` 或 `turn/end`）。
 2. 用会话自己的前缀（命中缓存）让模型按模板写交接文档 —— 不额外全量 prefill；缺小节或模型自己标注「截断」时，先续写、再重写。
-3. 通过 DSH 的压缩事务把整段历史替换成这一条消息；旧消息仍在会话日志里，rewind 可回滚。
-4. 下一轮上下文只剩 系统提示词 + 工具定义 + 交接文档。
+3. 通过 DSH 的压缩事务把**最旧的这一段**历史替换成这一条检查点消息；旧消息仍在会话日志里，rewind 可回滚。
+4. 下一轮上下文 = 系统提示词 + 工具定义 + 检查点消息 + 逐字保留的最近尾部（沿用原生 `retainRatio` 默认 0.16，即约 16% 窗口原文；切点不会拆散工具调用与其结果）。
 
 ## 触发点公式
 
@@ -85,7 +85,7 @@ node scripts/preset-scope.mjs disable  # 全部恢复原生
 |---|---|
 | 预设行 `config` | 默认值：`thresholdRatio` / `headroomTokens` / `maxTokens` / `idleDelayMs` / `presetId` |
 | `~/.dsh-handoff-compaction/settings.json` | 设置页写入的实时值（引擎每次判定读取，按 mtime 缓存） |
-| `~/.dsh-handoff-compaction/template.md` | 交接模板（缺失时按内置模板生成） |
+| `~/.dsh-handoff-compaction/template.md` | 交接模板（缺失时按内置模板生成）；默认内容 = DSH 原生压缩指令 `COMPACTION_INSTRUCTION` 的中译版（8 个小节，唯一偏离是要求用中文工程表述书写），母本见 `docs/template-native-zh.md` |
 | `~/.dsh-handoff-compaction/ui.log` | 设置页 RPC 与「打开文件」诊断日志 |
 
 设置页支持「全局生效 / 按预设生效」：保存时 UI 会自动执行 `preset-scope.mjs enable`。按预设时，勾选的预设切到插件并关闭其原生压缩，其余可编辑预设恢复自身原生行；根级 `compaction-basic` 的 `auto:false` 守卫只在至少一个预设使用插件时写入。
