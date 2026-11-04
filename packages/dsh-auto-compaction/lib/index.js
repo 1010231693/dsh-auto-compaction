@@ -60,7 +60,7 @@ function trace(message) {
 
 let lastOpenRequest = "";
 
-const DISPLAY_STYLES = new Set(["orbit", "strip", "ring", "topbar"]);
+const DISPLAY_STYLES = new Set(["orbit", "strip", "ring", "topbar", "corner"]);
 
 function normalizeDisplayStyle(value) {
   return typeof value === "string" && DISPLAY_STYLES.has(value) ? value : "orbit";

@@ -41,10 +41,11 @@ window.__ModuleLoader__.load({
       { id: "strip", label: "状态条" },
       { id: "ring", label: "进度环" },
       { id: "topbar", label: "顶部条" },
+      { id: "corner", label: "右上角" },
     ];
     var EXAMPLE_WINDOW = 250000, EXAMPLE_RESERVED = 20000, EXAMPLE_HEADROOM = 10000;
 
-    var DISPLAY_STYLES = ["orbit", "strip", "ring", "topbar"];
+    var DISPLAY_STYLES = ["orbit", "strip", "ring", "topbar", "corner"];
     var displayStyle = "orbit";
     var displayStyleListeners = [];
 
@@ -103,7 +104,11 @@ window.__ModuleLoader__.load({
     var STATUS_MUTED = "var(--dsh-text-secondary, var(--dsw-alias-label-secondary, #9aa0a6))";
     var STATUS_FAINT = "var(--dsh-text-tertiary, var(--dsw-alias-label-tertiary, #7f858c))";
     var STATUS_BORDER = "var(--dsh-border, var(--dsw-alias-border-l2, #2c2e33))";
-    var STATUS_PANEL = "var(--dsw-alias-interactive-bg-hover, rgba(127,133,140,.10))";
+    // Opaque elevated surface. The menu token is intentionally translucent
+    // (menu layers add their own backdrop blur); the status surfaces must stay
+    // readable over live conversation text without a blur.
+    var STATUS_SURFACE = "var(--dsw-alias-bg-layer-3, #353638)";
+    var STATUS_PANEL = STATUS_SURFACE;
     var STATUS_ACCENT = "var(--dsw-alias-state-business-primary, #4c8dff)";
     var STATUS_SUCCESS = "var(--dsw-alias-state-success-primary, #3fb950)";
     var STATUS_WARN = "var(--dsw-alias-state-warn-primary, #d29922)";
@@ -344,13 +349,48 @@ window.__ModuleLoader__.load({
             h("span", { style: {
               display: "inline-flex", alignItems: "center", gap: 7, height: 26, padding: "0 11px",
               borderRadius: 999, border: "1px solid " + STATUS_ACCENT,
-              background: "var(--dsw-specific-menu, #23252a)", color: STATUS_TEXT, fontSize: 11, whiteSpace: "nowrap",
+              background: STATUS_SURFACE, color: STATUS_TEXT, fontSize: 11, whiteSpace: "nowrap",
             } },
               h("span", { className: "dsh-handoff-pulse", style: { width: 7, height: 7, borderRadius: "50%", background: STATUS_ACCENT } }),
               "压缩中 · " + statusStep(status) + " · " + clockText(startedAt)
             )
           );
           return ReactDOM.createPortal(h(React.Fragment, null, topLine, pill), document.body);
+        }
+        if (themeStyle === "corner") {
+          return ReactDOM.createPortal(
+            h("div", {
+              role: "status",
+              "aria-live": "polite",
+              "data-dsh-handoff-status": "running",
+              style: {
+                position: "fixed",
+                right: 20,
+                top: 96,
+                zIndex: 70,
+                pointerEvents: "none",
+                width: 268,
+                maxWidth: "calc(100vw - 40px)",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 9,
+                padding: "10px 12px",
+                borderRadius: 10,
+                background: STATUS_SURFACE,
+                border: "1px solid " + STATUS_BORDER,
+                borderLeft: "2px solid " + STATUS_ACCENT,
+                boxShadow: "0 14px 34px rgba(0,0,0,.38)",
+              },
+            },
+              h("span", { className: "dsh-handoff-pulse", style: { width: 8, height: 8, borderRadius: "50%", background: STATUS_ACCENT, flex: "0 0 auto", marginTop: 5 } }),
+              h("div", { style: { minWidth: 0, flex: 1 } },
+                h("div", { style: { fontSize: 12, fontWeight: 600, color: STATUS_TEXT, lineHeight: "17px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
+                h("div", { style: { marginTop: 2, fontSize: 10.5, color: STATUS_MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } },
+                  clockText(startedAt) + " · " + statusStep(status) + " · 消息会排队")
+              )
+            ),
+            document.body
+          );
         }
         var indicator = themeStyle === "ring"
           ? h("div", { style: { position: "relative", width: 64, height: 64 } },
@@ -388,13 +428,13 @@ window.__ModuleLoader__.load({
           // scrim here would falsely suggest the conversation is frozen.
         };
         var cardStyle = {
-          width: 260,
+          width: 264,
           maxWidth: "82%",
-          background: "var(--dsw-specific-menu, #23252a)",
+          background: STATUS_SURFACE,
           border: "1px solid " + STATUS_BORDER,
           borderRadius: 14,
           padding: "16px 16px 14px",
-          boxShadow: "0 22px 50px rgba(0,0,0,.34)",
+          boxShadow: "0 20px 46px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.3)",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -406,9 +446,9 @@ window.__ModuleLoader__.load({
           h("div", { role: "status", "aria-live": "polite", "data-dsh-handoff-status": "running", style: overlayStyle },
             h("div", { style: cardStyle },
               indicator,
-              h("div", { style: { fontSize: 12.5, fontWeight: 500, color: STATUS_TEXT } }, title),
+              h("div", { style: { fontSize: 12.5, fontWeight: 600, color: STATUS_TEXT } }, title),
               h("div", { style: { fontSize: 11, color: STATUS_MUTED } }, cardSub),
-              h("div", { style: { fontSize: 10.5, color: STATUS_FAINT } }, "完成后整段历史收成一条交接文档")
+              h("div", { style: { fontSize: 10.5, color: STATUS_MUTED, opacity: 0.85 } }, "完成后整段历史收成一条交接文档")
             )
           ),
           document.body
@@ -429,6 +469,7 @@ window.__ModuleLoader__.load({
           borderLeft: "3px solid " + color,
           borderRadius: 8,
           background: STATUS_PANEL,
+          boxShadow: "0 8px 22px rgba(0,0,0,.28)",
           color: STATUS_TEXT,
           fontSize: 12,
           lineHeight: "18px",
@@ -525,6 +566,14 @@ window.__ModuleLoader__.load({
             )
           )
         );
+      } else if (style === "corner") {
+        overlay = h("div", { style: { position: "absolute", right: 6, top: 6, width: 118, display: "flex", alignItems: "flex-start", gap: 5, padding: "5px 6px", borderRadius: 5, background: "#23252a", border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent } },
+          h("span", { className: "dsh-handoff-pulse", style: { width: 4, height: 4, borderRadius: "50%", background: C.accent, marginTop: 4, flex: "0 0 auto" } }),
+          h("div", { style: { minWidth: 0 } },
+            h("div", { style: { fontSize: 7.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "正在压缩历史会话"),
+            h("div", { style: { fontSize: 6.5, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "00:42 · 消息会排队")
+          )
+        );
       }
       var strip = style === "strip"
         ? h("div", { style: { margin: "0 8px 4px", border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent, borderRadius: 5, background: "#212226", padding: "4px 6px" } },
@@ -547,7 +596,7 @@ window.__ModuleLoader__.load({
             h("span", { style: { marginLeft: "auto", fontSize: 8.5, color: C.muted, border: "1px solid " + C.line, borderRadius: 999, padding: "0 6px" } }, "轻量本地")
           ),
           h("div", { style: { flex: 1, minHeight: 0, padding: (style === "topbar" ? 22 : 7) + "px 8px 7px", position: "relative", overflow: "hidden" } },
-            style === "topbar" ? overlay : null,
+            (style === "topbar" || style === "corner") ? overlay : null,
             chatChildren,
             (style === "ring" || style === "orbit") ? overlay : null
           ),
