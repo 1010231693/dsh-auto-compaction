@@ -171,6 +171,36 @@ window.__ModuleLoader__.load({
       return call(connection, "status", { sessionId: sessionId }, 3500);
     }
 
+    /**
+     * Anchor the corner card to the conversation area instead of the window:
+     * its top lines up with the first message row (below the 对话/轨迹 tabs) and
+     * its right edge keeps the header's inset, so it never covers the tab row.
+     * The width shrinks to the gutter between the message column and the window
+     * edge when the window is narrow.
+     */
+    function cornerPlacement(desiredWidth) {
+      var right = (typeof window === "undefined" ? 0 : window.innerWidth) - 20;
+      var top = 96;
+      var width = desiredWidth;
+      try {
+        var body = document.querySelector("[data-conversation-content]");
+        var br = body && body.getBoundingClientRect();
+        if (br && br.height > 80) {
+          top = Math.round(br.top) + 8;
+          right = Math.round(br.right) - 20;
+        }
+        var card = document.querySelector("[data-composer-card]");
+        var cr = card && card.getBoundingClientRect();
+        if (cr && cr.width > 120) {
+          var clearance = parseFloat(getComputedStyle(card).getPropertyValue("--dsh-composer-side-clearance")) || 16;
+          var columnRight = Math.round(cr.right) - clearance;
+          width = Math.max(184, Math.min(desiredWidth, right - columnRight - 10));
+        }
+      } catch (error) { /* keep the window-corner fallback */ }
+      width = Math.max(160, Math.min(width, right - 12));
+      return { left: Math.max(8, Math.round(right - width)), top: Math.round(top), width: Math.round(width) };
+    }
+
     function StatusDock(props) {
       ensureStatusStyles();
       var connection = props.connection;
@@ -358,23 +388,25 @@ window.__ModuleLoader__.load({
           return ReactDOM.createPortal(h(React.Fragment, null, topLine, pill), document.body);
         }
         if (themeStyle === "corner") {
+          var place = cornerPlacement(268);
           return ReactDOM.createPortal(
             h("div", {
               role: "status",
               "aria-live": "polite",
               "data-dsh-handoff-status": "running",
+              title: "压缩期间发送的消息会排队",
               style: {
                 position: "fixed",
-                right: 20,
-                top: 96,
+                left: place.left,
+                top: place.top,
                 zIndex: 70,
                 pointerEvents: "none",
-                width: 268,
-                maxWidth: "calc(100vw - 40px)",
+                boxSizing: "border-box",
+                width: place.width,
                 display: "flex",
                 alignItems: "flex-start",
-                gap: 9,
-                padding: "10px 12px",
+                gap: 8,
+                padding: "9px 11px",
                 borderRadius: 10,
                 background: STATUS_SURFACE,
                 border: "1px solid " + STATUS_BORDER,
@@ -386,7 +418,7 @@ window.__ModuleLoader__.load({
               h("div", { style: { minWidth: 0, flex: 1 } },
                 h("div", { style: { fontSize: 12, fontWeight: 600, color: STATUS_TEXT, lineHeight: "17px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
                 h("div", { style: { marginTop: 2, fontSize: 10.5, color: STATUS_MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } },
-                  clockText(startedAt) + " · " + statusStep(status) + " · 消息会排队")
+                  clockText(startedAt) + " · " + statusStep(status) + (place.width >= 216 ? " · 消息会排队" : ""))
               )
             ),
             document.body
@@ -527,7 +559,7 @@ window.__ModuleLoader__.load({
     function ThemePreview(props) {
       var style = normalizeDisplayStyle(props.theme);
       var chatChildren = [
-        h("div", { key: "user", style: { marginLeft: "auto", maxWidth: "78%", border: "1px solid rgba(76,141,255,.24)", background: "rgba(76,141,255,.14)", borderRadius: "7px 7px 2px 7px", padding: "4px 6px", fontSize: 9, color: "#d9dbde" } }, "请完整读取这个文件并总结…"),
+        h("div", { key: "user", style: { marginLeft: "auto", maxWidth: "62%", border: "1px solid rgba(76,141,255,.24)", background: "rgba(76,141,255,.14)", borderRadius: "7px 7px 2px 7px", padding: "4px 6px", fontSize: 9, color: "#d9dbde" } }, "请完整读取这个文件并总结…"),
         h("div", { key: "lines", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 6 } },
           h("i", { key: "l1", style: { height: 4, borderRadius: 99, background: C.line } }),
           h("i", { key: "l2", style: { height: 4, borderRadius: 99, background: C.line, width: "88%" } }),
@@ -567,11 +599,11 @@ window.__ModuleLoader__.load({
           )
         );
       } else if (style === "corner") {
-        overlay = h("div", { style: { position: "absolute", right: 6, top: 6, width: 118, display: "flex", alignItems: "flex-start", gap: 5, padding: "5px 6px", borderRadius: 5, background: "#23252a", border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent } },
+        overlay = h("div", { style: { position: "absolute", right: 8, top: 9, boxSizing: "border-box", width: 104, display: "flex", alignItems: "flex-start", gap: 4, padding: "4px 5px", borderRadius: 5, background: "#23252a", border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent } },
           h("span", { className: "dsh-handoff-pulse", style: { width: 4, height: 4, borderRadius: "50%", background: C.accent, marginTop: 4, flex: "0 0 auto" } }),
           h("div", { style: { minWidth: 0 } },
-            h("div", { style: { fontSize: 7.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "正在压缩历史会话"),
-            h("div", { style: { fontSize: 6.5, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "00:42 · 消息会排队")
+            h("div", { style: { fontSize: 7, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "正在压缩历史会话"),
+            h("div", { style: { fontSize: 6.5, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "00:42 · 2/3 写文档")
           )
         );
       }
