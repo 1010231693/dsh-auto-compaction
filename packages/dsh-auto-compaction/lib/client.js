@@ -1,4 +1,4 @@
-/* dsh-auto-compaction-ui client bundle.
+/* dsh-auto-compaction client bundle.
  * Hand-written in the ModuleLoader wrapper shape DSH's client runtime uses.
  *
  * Renders the 设置 → 会话压缩 section. All persistence goes through the
@@ -7,7 +7,7 @@
  * every decision, so a save takes effect without restarting DSH.
  */
 window.__ModuleLoader__.load({
-  id: "dsh-auto-compaction-ui",
+  id: "dsh-auto-compaction",
   factory: (require) => {
     "use strict";
     var module = { exports: {} };
@@ -17,7 +17,7 @@ window.__ModuleLoader__.load({
     var ReactDOM = require("react-dom");
     var h = React.createElement;
 
-    var name = "dsh-auto-compaction-ui";
+    var name = "dsh-auto-compaction";
     var inject = ["slots", "connection"];
     var CHANNEL = "/dsh-auto-compaction";
 

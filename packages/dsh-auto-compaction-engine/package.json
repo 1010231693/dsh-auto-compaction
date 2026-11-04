@@ -1,0 +1,47 @@
+{
+  "name": "dsh-auto-compaction-engine",
+  "version": "0.2.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./lib/*": "./lib/*",
+    "./package.json": "./package.json"
+  },
+  "description": "A session auto-compaction plugin that is friendly to local models: compaction never makes the local engine re-read history, saving a lot of time; the trigger point and the saved content of the compacted session are user-configurable.",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1010231693/dsh-auto-compaction.git",
+    "directory": "packages/dsh-auto-compaction-engine"
+  },
+  "homepage": "https://github.com/1010231693/dsh-auto-compaction#readme",
+  "bugs": {
+    "url": "https://github.com/1010231693/dsh-auto-compaction/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "compaction",
+    "context",
+    "handoff",
+    "llm",
+    "local-llm"
+  ],
+  "files": [
+    "lib",
+    "scripts",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

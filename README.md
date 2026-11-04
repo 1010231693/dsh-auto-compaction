@@ -23,8 +23,10 @@
 
 | 包 | 作用 | 挂载方式 |
 |---|---|---|
-| `dsh-auto-compaction` | 引擎：提供 `ctx.compaction`，负责触发、摘要、替换历史 | Agent 预设里的 `compaction-basic` 槽位 |
-| `dsh-auto-compaction-ui` | 设置页：`设置 → 会话压缩`，读写边车配置 | profile 的 `dsh.profile.bundles` |
+| `dsh-auto-compaction` | 设置页与状态提示（bundle）：`设置 → 会话压缩`，读写边车配置 | profile 的 `dsh.profile.bundles` |
+| `dsh-auto-compaction-engine` | 引擎：提供 `ctx.compaction`，负责触发、摘要、替换历史 | Agent 预设里的 `compaction-basic` 槽位 |
+
+> 0.2.0 起两个包名互换：`dsh-auto-compaction` 是市场里安装/显示的 bundle 包，引擎改名为 `dsh-auto-compaction-engine`（旧版 `dsh-auto-compaction-ui` 已废弃）。
 
 > 引擎包**绝不能**声明 `dsh.client`：那会让 DSH 把它当 profile 级插件再挂一次，导致 `ctx.compaction` 重复注册、启动失败。
 
@@ -55,7 +57,7 @@
 
    ```yaml
    - id: compaction-basic
-     name: "dsh-auto-compaction"
+     name: "dsh-auto-compaction-engine"
      config:
        thresholdRatio: 0.9
        headroomTokens: 10000
@@ -64,7 +66,7 @@
        presetId: <preset id>
    ```
 
-2. UI：把 `dsh-auto-compaction-ui` 加入 profile 的 `dependencies`（`link:` 或 npm）与 `dsh.profile.bundles`。
+2. UI：把 `dsh-auto-compaction` 加入 profile 的 `dependencies`（`link:` 或 npm）与 `dsh.profile.bundles`；它会带着引擎依赖一起安装。
 3. 重启 DSH。
 
 仓库内含 `scripts/preset-scope.mjs`，可在「原生压缩」和「插件接管」之间整块切换（写前校验 YAML、留 `.bak-scope` 备份）：

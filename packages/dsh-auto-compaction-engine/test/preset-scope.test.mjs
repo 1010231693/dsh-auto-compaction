@@ -72,7 +72,7 @@ test("enable swaps the slot and guards the profile native engine", () => {
     run("enable", dir, { preset: path.join(dir, "preset.yml") });
     const preset = fs.readFileSync(path.join(dir, "preset.yml"), "utf8");
     const profile = fs.readFileSync(path.join(dir, "profile.yml"), "utf8");
-    if (!preset.includes('name: "dsh-auto-compaction"')) throw new Error("slot was not switched to the plugin");
+    if (!preset.includes('name: "dsh-auto-compaction-engine"')) throw new Error("slot was not switched to the plugin");
     if (!preset.includes("presetId: preset-fixture")) throw new Error("plugin row did not inherit the preset id");
     if (!profile.includes("handoff:native-guard:begin")) throw new Error("native guard marker missing");
     if (!/auto:\s*false/.test(profile)) throw new Error("native auto was not disabled");
@@ -134,7 +134,7 @@ test("settings preset list switches only the selected presets", () => {
     run("enable", dir, { env });
     let local = fs.readFileSync(localFile, "utf8");
     let standard = fs.readFileSync(standardFile, "utf8");
-    if (!local.includes('name: "dsh-auto-compaction"')) throw new Error("selected preset did not switch to the plugin");
+    if (!local.includes('name: "dsh-auto-compaction-engine"')) throw new Error("selected preset did not switch to the plugin");
     if (!local.includes("presetId: lightweight-local")) throw new Error("selected preset id not applied");
     if (!standard.includes('name: "@deepseek-ai/dsh-compaction-basic"')) throw new Error("unselected preset did not stay native");
     if (!standard.includes("auto: true")) throw new Error("unselected preset lost native auto");
@@ -144,7 +144,7 @@ test("settings preset list switches only the selected presets", () => {
     run("enable", dir, { env });
     local = fs.readFileSync(localFile, "utf8");
     standard = fs.readFileSync(standardFile, "utf8");
-    if (!standard.includes('name: "dsh-auto-compaction"')) throw new Error("newly selected preset did not switch");
+    if (!standard.includes('name: "dsh-auto-compaction-engine"')) throw new Error("newly selected preset did not switch");
     if (!standard.includes("presetId: lightweight-standard")) throw new Error("newly selected preset id not applied");
     if (!local.includes('name: "@deepseek-ai/dsh-compaction-basic"')) throw new Error("previously selected preset was not reset to native");
 

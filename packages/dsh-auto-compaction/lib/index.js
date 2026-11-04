@@ -1,650 +1,284 @@
 /**
- * dsh-handoff-compaction
+ * dsh-auto-compaction — node half (bundle).
  *
- * Idle-time handoff compaction for deepseek-harness.
+ * Registers no service (so it can be mounted alongside the engine without any
+ * risk of a duplicate `ctx.compaction`). Its only job is to mirror its own
+ * configuration into the sidecar file the engine reads on every decision:
  *
- * At a configurable share of the model window (default 90%) this backend waits
- * for the agent to go idle, then asks the routed model — replaying the current
- * conversation as the prompt prefix so the provider's cache is reused — for a
- * handoff checkpoint, and replaces the whole compactable surface with that one
- * message. The next user turn therefore starts from system prompt + tools +
- * handoff text, and nothing else.
+ *   %USERPROFILE%\.dsh-handoff-compaction\settings.json
  *
- * It subclasses the stock basic backend so selection, tool-pair balance,
- * durable compaction markers, flushes and the idle admission reservation are
- * the proven implementation; only the trigger point, the summarization
- * template and the idle gate differ.
+ * Writing on every (re)load is what makes a settings save take effect live:
+ * DSH reloads this plugin, this function runs, the engine picks the file up at
+ * its next idle check.
  */
 import z from "@deepseek-ai/schemastery";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { BlockAssembler, LlmError, contentHasImage } from "@deepseek-ai/dsh-llm";
-import BasicCompactionEngine from "@deepseek-ai/dsh-compaction-basic";
-import { decideTrigger, shouldAttempt } from "./plan.js";
-import { writeStatus } from "./status.js";
-import {
-  continuationInstruction,
-  expectedSections,
-  looksTruncated,
-  mergeSummary,
-  rewriteInstruction,
-  stripTruncationMarkers,
-  validateSummary,
-} from "./summary.js";
+import { dirname, join } from "node:path";
+import { execFile, spawn } from "node:child_process";
 
-const LOG = "[handoff]";
-const MAX_SUMMARY_ATTEMPTS = 3;
+export const name = "dsh-auto-compaction";
+export const inject = [];
 
-const SETTINGS_DIR = join(homedir(), ".dsh-handoff-compaction");
-// Test harnesses point this at a missing file so the live sidecar cannot leak
-// into a case that expects the configured ratio.
-const SETTINGS_FILE = process.env.DSH_HANDOFF_SETTINGS_FILE ?? join(SETTINGS_DIR, "settings.json");
-const DEFAULT_TEMPLATE_FILE = join(SETTINGS_DIR, "template.md");
+export const Config = z.object({
+  enabled: z.boolean().default(true),
+  thresholdRatio: z.number().default(90),
+  scopePreset: z.boolean().default(false),
+  presets: z.string().default("lightweight-local"),
+  templateFile: z.string().default(""),
+  openTemplate: z.string().default(""),
+  displayStyle: z.string().default("orbit"),
+});
+
+const DIR = join(homedir(), ".dsh-handoff-compaction");
+const SETTINGS_FILE = join(DIR, "settings.json");
+const TEMPLATE_FILE = join(DIR, "template.md");
+const UI_LOG = join(DIR, "ui.log");
+const STATUS_DIR = process.env.DSH_HANDOFF_STATUS_DIR || join(DIR, "status");
+const STATUS_SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 /**
- * Live settings written by the companion UI package (dsh-handoff-compaction-ui).
- * Read fresh on every decision, cached by mtime so a turn never blocks on disk.
+ * Read the engine's per-session status sidecar without importing the engine
+ * package: DSH's host module fallback cannot resolve a linked package from the
+ * UI package's real path, and a top-level import here blocks startup.
  */
-let settingsCache = { mtimeMs: -1, value: undefined };
+function readStatus(sessionId) {
+  if (typeof sessionId !== "string" || !STATUS_SESSION_ID.test(sessionId)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(join(STATUS_DIR, sessionId + ".json"), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const requireFromUi = createRequire(import.meta.url);
+
+function trace(message) {
+  try { mkdirSync(DIR, { recursive: true }); appendFileSync(UI_LOG, new Date().toISOString() + " " + message + String.fromCharCode(10), "utf8"); } catch { /* ignore */ }
+}
+
+let lastOpenRequest = "";
+
+const DISPLAY_STYLES = new Set(["orbit", "strip", "ring", "topbar"]);
+
+function normalizeDisplayStyle(value) {
+  return typeof value === "string" && DISPLAY_STYLES.has(value) ? value : "orbit";
+}
+
+function normalize(config) {
+  const raw = Number(config.thresholdRatio ?? 90);
+  const pct = Number.isFinite(raw) ? Math.max(1, Math.min(100, raw)) : 90;
+  return {
+    enabled: config.enabled !== false,
+    thresholdRatio: pct / 100,
+    scope: config.scopePreset === true ? "preset" : "global",
+    presets: String(config.presets ?? "")
+      .split(/[,，\s]+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0),
+    templateFile: String(config.templateFile ?? "").trim(),
+    displayStyle: normalizeDisplayStyle(config.displayStyle),
+  };
+}
+
+function writeSettings(ctx, settings) {
+  try {
+    mkdirSync(DIR, { recursive: true });
+    writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2) + "\n", "utf8");
+    ctx.logger?.info?.(`[handoff-ui] settings -> ${SETTINGS_FILE} (${JSON.stringify(settings)})`);
+  } catch (error) {
+    ctx.logger?.warn?.(`[handoff-ui] settings write failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function launch(ctx, label, command, args) {
+  try {
+    const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: false });
+    child.on("error", (error) => {
+      trace("spawn error " + label + " (" + command + "): " + (error instanceof Error ? error.message : String(error)));
+      ctx.logger?.warn?.(`[handoff-ui] ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    child.on("spawn", () => trace("spawned " + label + " (" + command + ")"));
+    child.unref();
+    return true;
+  } catch (error) {
+    trace("spawn threw " + label + ": " + (error instanceof Error ? error.message : String(error)));
+    return false;
+  }
+}
+
+async function handleOpen(ctx, request, target) {
+  const trimmed = String(request ?? "").trim();
+  if (trimmed === "" || trimmed === lastOpenRequest) return { ok: true, value: { skipped: true } };
+  lastOpenRequest = trimmed;
+  const mode = trimmed.startsWith("folder") ? "folder" : "file";
+  const root = process.env.SystemRoot || "C:\\Windows";
+  const explorerPath = join(root, "explorer.exe");
+  const explorer = existsSync(explorerPath) ? explorerPath : "explorer.exe";
+
+  trace("open requested mode=" + mode + " target=" + target + " explorer=" + explorer);
+  if (!existsSync(target)) {
+    const message = "file not found: " + target;
+    trace("open failed: " + message);
+    return { ok: false, error: { code: "auto-compaction/open-missing", message } };
+  }
+
+  // Launch through the existing Explorer shell. DSH's host runs plugin
+  // children in a job object; cmd/PowerShell descendants are killed with the
+  // request, while Explorer hands the file to the shell and exits.
+  const args = mode === "folder" ? ["/select," + target] : [target];
+  const ok = launch(ctx, mode + "/explorer", explorer, args);
+  return ok
+    ? { ok: true, value: { mode, target, opener: "explorer" } }
+    : { ok: false, error: { code: "auto-compaction/open-failed", message: "explorer failed to start" } };
+}
+
+function scopeScriptPath() {
+  try {
+    const entry = requireFromUi.resolve("dsh-auto-compaction-engine");
+    return join(dirname(entry), "..", "scripts", "preset-scope.mjs");
+  } catch {
+    return join(homedir(), ".dsh-local-pkgs", "dsh-auto-compaction-engine", "scripts", "preset-scope.mjs");
+  }
+}
+
+function execSwitchOnce(command, env, script) {
+  return new Promise((resolve, reject) => {
+    execFile(command, [script, "enable"], { timeout: 6000, windowsHide: true, env }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+/**
+ * Apply the current settings sidecar to the preset/profile YAML. `node` is the
+ * normal path; the Electron binary with ELECTRON_RUN_AS_NODE is the fallback
+ * when the host has no node on PATH.
+ */
+async function applyScopeSwitch() {
+  const script = scopeScriptPath();
+  if (!existsSync(script)) {
+    const message = "preset-scope.mjs not found: " + script;
+    trace("scope switch failed: " + message);
+    return { ok: false, message };
+  }
+  const explicit = process.env.DSH_NODE;
+  const attempts = typeof explicit === "string" && explicit.trim().length > 0
+    ? [{ command: explicit.trim(), env: process.env }]
+    : [
+      { command: "node", env: process.env },
+      { command: process.execPath, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } },
+    ];
+  let lastError;
+  for (const attempt of attempts) {
+    try {
+      const result = await execSwitchOnce(attempt.command, attempt.env, script);
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+      trace("scope switch ok" + (output ? " | " + output : ""));
+      return { ok: true, output };
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== "ENOENT") break;
+    }
+  }
+  const output = `${lastError?.stdout ?? ""}${lastError?.stderr ?? ""}`.trim();
+  const message = (lastError?.message ?? String(lastError)) + (output ? "\n" + output : "");
+  trace("scope switch failed: " + message);
+  return { ok: false, message };
+}
+
+const CHANNEL = "/dsh-auto-compaction";
+
 function readSettings() {
   try {
-    const stat = statSync(SETTINGS_FILE);
-    if (stat.mtimeMs === settingsCache.mtimeMs) return settingsCache.value;
     const parsed = JSON.parse(readFileSync(SETTINGS_FILE, "utf8"));
-    settingsCache = { mtimeMs: stat.mtimeMs, value: parsed && typeof parsed === "object" ? parsed : undefined };
-    return settingsCache.value;
+    return parsed && typeof parsed === "object" ? parsed : undefined;
   } catch {
     return undefined;
   }
 }
 
-function templatePathFrom(configured) {
-  if (typeof configured === "string" && configured.trim().length > 0) return configured.trim();
-  const env = process.env.DSH_HANDOFF_TEMPLATE;
-  if (typeof env === "string" && env.trim().length > 0) return env.trim();
-  return DEFAULT_TEMPLATE_FILE;
+function sanitize(payload) {
+  const pct = Number(payload?.thresholdRatio);
+  const ratio = Number.isFinite(pct) ? Math.max(1, Math.min(100, pct)) : 90;
+  const presets = Array.isArray(payload?.presets)
+    ? payload.presets.filter((v) => typeof v === "string" && v.trim().length > 0)
+    : String(payload?.presets ?? "").split(/[,，s]+/).filter((v) => v.trim().length > 0);
+  return {
+    enabled: payload?.enabled !== false,
+    thresholdRatio: ratio / 100,
+    scope: payload?.scope === "preset" ? "preset" : "global",
+    presets,
+    templateFile: String(payload?.templateFile ?? "").trim(),
+    displayStyle: normalizeDisplayStyle(payload?.displayStyle),
+  };
 }
 
-/** Read the handoff template, falling back to the built-in text. */
-function readTemplate(filePath, autoCreate) {
-  try {
-    if (!existsSync(filePath)) {
-      if (!autoCreate) return { text: undefined, source: "builtin (file missing)" };
-      mkdirSync(join(filePath, ".."), { recursive: true });
-      writeFileSync(filePath, BUILTIN_INSTRUCTION + "\n", "utf8");
-      return { text: BUILTIN_INSTRUCTION, source: "builtin (written to " + filePath + ")" };
-    }
-    const text = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-    if (text.trim().length < 20) return { text: undefined, source: "builtin (file empty)" };
-    return { text, source: filePath };
-  } catch (error) {
-    return { text: undefined, source: `builtin (read failed: ${error instanceof Error ? error.message : String(error)})` };
-  }
-}
-
-
-const BUILTIN_INSTRUCTION = [
-  "你现在要为本会话写一份交接文档：我会用它替换掉上面的全部对话记录，然后由你在一个空白的上下文里继续同一件事。写漏的东西将永久丢失。",
-  "",
-  "只输出 Markdown，严格按下面小节顺序，每节用短横线要点，不许省略任何小节；没有内容写「（无）」。",
-  "",
-  "## 用户目标与原始要求",
-  "- 用户最初想做什么、之后怎么改过口；关键原话逐字引用",
-  "",
-  "## 当前任务状态",
-  "- 在做什么、进行到哪一步、哪些已完成、哪些没完成",
-  "",
-  "## 涉及的文件与代码",
-  "- 精确路径：为什么重要、改了什么、还有哪里没改",
-  "",
-  "## 已验证的事实与命令",
-  "- 跑过的命令、测试结果、报错原文、环境约束（版本、端口、路径）",
-  "",
-  "## 关键决策与被放弃的方案",
-  "- 选了什么、为什么；试过但放弃的方案及放弃原因",
-  "",
-  "## 待办与下一步",
-  "- 用户明确要求但尚未完成的项；紧接着要执行的第一步",
-  "",
-  "## 风险与注意事项",
-  "- 容易踩的坑、用户的偏好与禁忌",
-  "",
-  "规则：",
-  "- 保留精确的路径、命令、错误串、标识符、数值、函数签名；不要概括成\"修改了相关文件\"这类废话。",
-  "- 如果对话里有用户粘贴的长文档或上一轮交接文档（例如包在 <compacted-summary> 标记里的那份），不要原样照抄：保留仍然生效的硬约束（路径、命令、版本、验收标准）并逐字引用其关键句，其余概括；过时的内容删掉，最终只输出一份同样结构的文档。",
-  "- 如果用户的早期消息给出了一份磁盘上的工程交接文档的绝对路径，必须逐字保留该路径并注明\"需要时重新读取该文件\"；不要把它的内容当成必须在本文档里复述的东西。",
-  "- 不要提到这份交接文档本身，也不要说上下文被压缩或摘要。",
-  "- 只输出文档正文，不要调用任何工具。",
-  "",
-  "写入时还要记住下面两条，它们会被交给后续的你执行：",
-  "- 更早的对话消息不会留在你的上下文里，也没有任何工具或磁盘检索能把它们找回来。不要去搜索会话文件、日志或历史记录还原旧对话；文档里没写的，就当作不知道，直接说不知道。",
-  "- 用户问起\"之前说过什么\"时，以本文档为准；文档没有逐字保留的内容（例如旧回答的原文），直接说明已经被压缩掉，不要编造，也不要为了找它去翻文件。",
-].join("\n");
-
-function finishError(finish) {
-  switch (finish.kind) {
-    case "error":
-    case "aborted":
-      return new LlmError(finish.failure.message, finish.failure.code, finish.failure);
-    case "max-tokens": {
-      const error = new Error("handoff summary truncated at the token cap (incomplete checkpoint)");
-      error.code = "MAX_TOKENS";
-      return error;
-    }
-    default:
-      return undefined;
-  }
-}
-
-function mergeUsage(left, right) {
-  if (left === undefined) return right;
-  if (right === undefined) return left;
-  const merged = { ...left };
-  for (const key of Object.keys(right)) {
-    const value = right[key];
-    if (typeof value === "number" && typeof merged[key] === "number") merged[key] += value;
-    else if (merged[key] === undefined) merged[key] = value;
-  }
-  return merged;
-}
-
-function errorCodeOf(error) {
-  return error !== null && typeof error === "object" && typeof error.code === "string" ? error.code : "";
-}
-
-export default class HandoffCompaction extends BasicCompactionEngine {
-  static inject = ["llm", "tokenMeter", "sessions"];
-
-  static Config = z.object({
-    thresholdRatio: z.number(),
-    headroomTokens: z.number(),
-    retainRatio: z.number(),
-    retainTokens: z.number(),
-    summarizationProvider: z.string(),
-    summarizationModel: z.string(),
-    maxTokens: z.number(),
-    compactionRetries: z.number(),
-    maxOverflowRetries: z.number(),
-    contextWindowOverride: z.number(),
-    reservedCompletionTokensOverride: z.number(),
-    idleDelayMs: z.number(),
-    minIntervalMs: z.number(),
-    minTokenGrowth: z.number(),
-    timeoutMs: z.number(),
-    dryRun: z.boolean(),
-    handoffInstruction: z.string(),
-    traceFile: z.string(),
-    traceConsole: z.boolean(),
-    templateFile: z.string(),
-    presetId: z.string(),
-    autoCreateTemplate: z.boolean(),
+export function apply(ctx, config = {}) {
+  const seeded = normalize(config);
+  if (readSettings() === undefined) writeSettings(ctx, seeded);
+  void handleOpen(ctx, config.openTemplate, seeded.templateFile || TEMPLATE_FILE).catch((error) => {
+    ctx.logger?.warn?.(`[handoff-ui] openTemplate failed: ${error instanceof Error ? error.message : String(error)}`);
   });
 
-  constructor(ctx, config = {}) {
-    const {
-      contextWindowOverride,
-      reservedCompletionTokensOverride,
-      idleDelayMs,
-      minIntervalMs,
-      minTokenGrowth,
-      timeoutMs,
-      dryRun,
-      handoffInstruction,
-      traceFile,
-      traceConsole,
-      templateFile,
-      presetId,
-      autoCreateTemplate,
-      ...base
-    } = config;
-    // The stock trigger is registered so the plugin switch can hand compaction
-    // back to the native engine live; compactIfNeeded() suppresses it while the
-    // handoff path is enabled.
-    super(ctx, { ...base, auto: true });
-    this.handoff = {
-      instruction: typeof handoffInstruction === "string" && handoffInstruction.trim().length > 0 ? handoffInstruction : undefined,
-      contextWindowOverride: contextWindowOverride ?? 0,
-      reservedOverride: reservedCompletionTokensOverride ?? -1,
-      idleDelayMs: idleDelayMs ?? 1_500,
-      minIntervalMs: minIntervalMs ?? 60_000,
-      minTokenGrowth: minTokenGrowth ?? 2_048,
-      timeoutMs: timeoutMs ?? 600_000,
-      dryRun: dryRun ?? false,
-      templateFile: templatePathFrom(templateFile ?? readSettings()?.templateFile),
-      presetId: typeof presetId === "string" ? presetId : "",
-      autoCreateTemplate: autoCreateTemplate !== false,
-    };
-    this.handoff.traceFile = typeof traceFile === "string" ? traceFile : "";
-    this.handoff.traceConsole = traceConsole === true;
-    // Materialise the template so the settings card can point at a real file.
-    try { readTemplate(this.handoff.templateFile, this.handoff.autoCreateTemplate); } catch { /* never block construction */ }
-    this.attempts = new WeakMap();
-    this.running = new WeakSet();
-    this.timers = new WeakMap();
-    this.agents = new WeakMap();
-    ctx.on("agent/status", ({ agent, status }) => {
-      if (agent?.session) this.agents.set(agent.session, agent);
-      if (status === "idle") this.scheduleCheck(agent, "agent/status idle");
-    });
-    // A finished turn is the gap the user described; agent/status is not the only
-    // place DSH reports it, so both paths are wired.
-    ctx.on("session/event", (session, event) => {
-      if (event?.type !== "turn/end") return;
-      const owner = this.agents.get(session);
-      if (owner !== undefined) this.scheduleCheck(owner, "turn/end");
-    });
-    this.log(`ready (threshold ${this.describeThreshold()}, dryRun=${this.handoff.dryRun}, trace=${this.handoff.traceFile || (this.handoff.traceConsole ? "console" : "off")})`);
-  }
-
-  describeThreshold() {
-    return `${Math.round((this.config.thresholdRatio ?? 0.9) * 100)}%`;
-  }
-
-  /**
-   * Settings switch. Missing settings or a missing field keeps the plugin on;
-   * only an explicit `enabled: false` hands compaction back to the stock engine.
-   */
-  handoffEnabled() {
-    const live = readSettings();
-    return !(live !== undefined && live.enabled === false);
-  }
-
-  /**
-   * The base registers its between-step pressure / overflow triggers whenever
-   * `auto` is on. While the handoff path is enabled they must stay inert, so
-   * the plugin still only compacts from its idle gate. Disabled: delegate, and
-   * DSH's native compaction behaves exactly as without the plugin.
-   */
-  async compactIfNeeded(agent, trigger, signal) {
-    if (this.handoffEnabled()) return null;
-    return super.compactIfNeeded(agent, trigger, signal);
-  }
-
-  log(message, level = "info") {
-    const line = `${new Date().toISOString()} ${LOG} ${message}`;
-    if (this.handoff?.traceConsole === true) {
-      try { console.error(line); } catch { /* trace must never break the turn */ }
-    }
-    const file = this.handoff?.traceFile;
-    if (typeof file === "string" && file.length > 0) {
-      try { appendFileSync(file, line + "\n"); } catch { /* trace must never break the turn */ }
-    }
-    const write = this.ctx.logger?.[level] ?? this.ctx.logger?.info;
-    if (typeof write === "function") write.call(this.ctx.logger, `${LOG} ${message}`);
-  }
-
-  /** Debounce the idle signal so a turn that immediately resumes does not trigger work. */
-  scheduleCheck(agent, why = "idle") {
-    const previous = this.timers.get(agent);
-    if (previous !== undefined) clearTimeout(previous);
-    const timer = setTimeout(() => {
-      this.timers.delete(agent);
-      void this.checkAndHandoff(agent, why);
-    }, this.handoff.idleDelayMs);
-    if (typeof timer.unref === "function") timer.unref();
-    this.timers.set(agent, timer);
-  }
-
-  routedTarget(agent) {
-    const routed = agent.session?.requestHeader?.()?.config;
-    if (routed?.provider && routed?.model) return { provider: routed.provider, model: routed.model };
-    const options = agent.options ?? {};
-    if (options.provider && options.model) return { provider: options.provider, model: options.model };
-    return undefined;
-  }
-
-  async checkAndHandoff(agent, why = "idle") {
-    if (this.running.has(agent)) return;
-    if (!this.handoffEnabled()) return;
+  ctx.inject(["connection"], (scope) => {
     try {
-      const session = agent.session;
-      if (!session) return;
-      const measurement = this.ctx.tokenMeter.measure(session);
-      const target = this.routedTarget(agent);
-      if (target === undefined) return this.log(`${why}: no routed provider/model yet; skipping`);
-
-      const info = await this.ctx.llm.resolveModelInfo(target.provider, target.model);
-      const headerMaxTokens = session.requestHeader?.()?.config?.maxTokens;
-      const reserved = this.handoff.reservedOverride >= 0
-        ? this.handoff.reservedOverride
-        : (headerMaxTokens ?? info.defaultMaxTokens ?? 0);
-      const contextWindow = this.handoff.contextWindowOverride > 0
-        ? this.handoff.contextWindowOverride
-        : info.context?.contextWindow;
-
-      const live = readSettings();
-      const scope = live?.scope === "preset" ? "preset" : "global";
-      const selectedPresets = Array.isArray(live?.presets) ? live.presets : [];
-      if (scope === "preset" && this.handoff.presetId !== "" && !selectedPresets.includes(this.handoff.presetId)) {
-        return this.log(`${why}: skipped by scope (preset "${this.handoff.presetId}" not selected)`);
+      const connection = scope.root?.connection ?? scope.connection;
+      if (connection === undefined) {
+        ctx.logger?.warn?.("[handoff-ui] no connection service; settings RPC unavailable");
+        return;
       }
-      const liveRatio = typeof live?.thresholdRatio === "number" && live.thresholdRatio > 0 && live.thresholdRatio <= 1
-        ? live.thresholdRatio
-        : undefined;
-
-      const decision = decideTrigger({
-        totalTokens: measurement.totalTokens,
-        contextWindow,
-        reservedCompletionTokens: reserved,
-        headroomTokens: this.config.headroomTokens ?? 0,
-        thresholdRatio: liveRatio ?? this.config.thresholdRatio ?? 0.9,
-      });
-      if (!decision.trigger) {
-        return this.log(`${why}: ${measurement.totalTokens}/${decision.thresholdTokens ?? "?"} tokens${decision.ok === false ? ` (${decision.reason})` : ""}`);
-      }
-
-      const last = this.attempts.get(agent);
-      if (!shouldAttempt({
-        now: Date.now(),
-        last,
-        tokens: measurement.totalTokens,
-        thresholdTokens: decision.thresholdTokens,
-        minIntervalMs: this.handoff.minIntervalMs,
-        minTokenGrowth: this.handoff.minTokenGrowth,
-      })) {
-        return this.log(`over threshold (${measurement.totalTokens} >= ${decision.thresholdTokens}) but holding: retry gate`);
-      }
-
-      this.attempts.set(agent, { at: Date.now(), tokens: measurement.totalTokens });
-      if (this.handoff.dryRun) {
-        return this.log(`DRY-RUN: would hand off now (${measurement.totalTokens} >= ${decision.thresholdTokens} of an assumed ${contextWindow}-token window)`);
-      }
-
-      this.running.add(agent);
-      writeStatus(session.id, {
-        phase: "running",
-        step: "prepare",
-        startedAt: Date.now(),
-        totalTokens: measurement.totalTokens,
-        thresholdTokens: decision.thresholdTokens,
-        contextWindow,
-        timeoutMs: this.handoff.timeoutMs,
-        provider: target.provider,
-        model: target.model,
-      });
-      try {
-        const result = await this.compactNow(agent, AbortSignal.timeout(this.handoff.timeoutMs));
-        if (result === null || result === undefined) {
-          writeStatus(session.id, {
-            phase: "done",
-            step: "done",
-            completedAt: Date.now(),
-            shadowedNodes: 0,
-            shadowedTokens: 0,
-            note: "no compactable range",
-          });
-          this.log("idle: no compactable range; nothing replaced", "warn");
-          return;
+      const dispose = connection.rpc.handle(CHANNEL, async (endpoint, payload) => {
+        try {
+          if (endpoint === "status") {
+            // A switched-off plugin leaves no live status behind; hide any
+            // sidecar left over from a compaction that ran before the switch.
+            if (readSettings()?.enabled === false) return { ok: true, value: null };
+            return { ok: true, value: readStatus(String(payload?.sessionId ?? "")) ?? null };
+          }
+          if (endpoint === "get") {
+            const stored = readSettings() ?? seeded;
+            return {
+              ok: true,
+              value: {
+                ...stored,
+                enabled: stored.enabled !== false,
+                displayStyle: normalizeDisplayStyle(stored.displayStyle),
+                defaultTemplate: TEMPLATE_FILE,
+              },
+            };
+          }
+          if (endpoint === "set") {
+            const next = sanitize(payload);
+            trace("set " + JSON.stringify(next));
+            writeSettings(ctx, next);
+            const applied = await applyScopeSwitch();
+            if (!applied.ok) {
+              return { ok: false, error: { code: "auto-compaction/switch-failed", message: applied.message }, value: next };
+            }
+            return { ok: true, value: { ...next, switchApplied: true, defaultTemplate: TEMPLATE_FILE } };
+          }
+          if (endpoint === "open") {
+            trace("open " + JSON.stringify(payload));
+            return await handleOpen(ctx, String(payload?.kind ?? "file") + ":" + Date.now(), String(payload?.path ?? "") || TEMPLATE_FILE);
+          }
+          return { ok: false, error: { code: "auto-compaction/bad-request", message: "unknown endpoint: " + String(endpoint) } };
+        } catch (error) {
+          return { ok: false, error: { code: "auto-compaction/failed", message: error instanceof Error ? error.message : String(error) } };
         }
-        writeStatus(session.id, {
-          phase: "done",
-          step: "done",
-          completedAt: Date.now(),
-          shadowedNodes: result.shadowedSeqs.length,
-          shadowedTokens: result.shadowedTokenCount,
-          missingSections: [],
-          retrying: false,
-        });
-        this.log(`committed: replaced ${result.shadowedSeqs.length} node(s) (~${result.shadowedTokenCount} tokens) with the handoff checkpoint`);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        writeStatus(agent.session?.id, {
-          phase: "failed",
-          step: "failed",
-          failedAt: Date.now(),
-          error: message,
-          errorCode: errorCodeOf(error),
-        });
-        throw error;
-      } finally {
-        this.running.delete(agent);
-      }
+      });
+      scope.effect(() => dispose, "auto-compaction settings rpc");
+      trace("rpc ready on " + CHANNEL);
+      ctx.logger?.info?.("[handoff-ui] settings RPC ready on " + CHANNEL);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      writeStatus(agent.session?.id, {
-        phase: "failed",
-        step: "failed",
-        failedAt: Date.now(),
-        error: message,
-        errorCode: errorCodeOf(error),
-      });
-      this.log(`failed: ${message}`, "warn");
+      ctx.logger?.warn?.("[handoff-ui] RPC registration failed: " + (error instanceof Error ? error.message : String(error)));
     }
-  }
-
-  /**
-   * Wrap the stock transaction so manual /compact and automatic idle
-   * compaction share the same status sidecar. The base method still owns the
-   * surface lock, summarization and commit.
-   */
-  async compactNow(agent, signal, sourceCommandId) {
-    // Manual /compact while the plugin is off stays a stock native compaction:
-    // no handoff template, no plugin status sidecar.
-    if (!this.handoffEnabled()) return super.compactNow(agent, signal, sourceCommandId);
-    const sessionId = agent?.session?.id;
-    let totalTokens;
-    try { totalTokens = this.ctx.tokenMeter.measure(agent.session).totalTokens; } catch { totalTokens = undefined; }
-    writeStatus(sessionId, {
-      phase: "running",
-      step: "prepare",
-      startedAt: Date.now(),
-      timeoutMs: this.handoff.timeoutMs,
-      ...(typeof totalTokens === "number" ? { totalTokens } : {}),
-      retrying: false,
-      writing: false,
-      missingSections: [],
-      error: "",
-      errorCode: "",
-    });
-    try {
-      const result = await super.compactNow(agent, signal, sourceCommandId);
-      writeStatus(sessionId, {
-        phase: "done",
-        step: "done",
-        completedAt: Date.now(),
-        shadowedNodes: Array.isArray(result?.shadowedSeqs) ? result.shadowedSeqs.length : 0,
-        shadowedTokens: typeof result?.shadowedTokenCount === "number" ? result.shadowedTokenCount : 0,
-        missingSections: [],
-        retrying: false,
-        writing: false,
-        ...(result === null || result === undefined ? { note: "no compactable range" } : {}),
-      });
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      writeStatus(sessionId, {
-        phase: "failed",
-        step: "failed",
-        failedAt: Date.now(),
-        error: message,
-        errorCode: errorCodeOf(error),
-      });
-      throw error;
-    }
-  }
-
-  /** Handoff template instead of the stock compaction instruction. */
-  async summarize(input, agent, signal) {
-    // Native pressure/overflow compaction runs through this same hook, so the
-    // stock prompt must come back the moment the plugin is switched off.
-    if (!this.handoffEnabled()) return super.summarize(input, agent, signal);
-    const latest = agent.session.requestHeader?.()?.config;
-    const configured = this.config.summarizationProvider && this.config.summarizationModel
-      ? { provider: this.config.summarizationProvider, model: this.config.summarizationModel }
-      : undefined;
-    const agentTarget = agent.options?.provider && agent.options?.model
-      ? { provider: agent.options.provider, model: agent.options.model }
-      : undefined;
-    const target = configured ?? latest ?? agentTarget;
-    if (target === undefined) throw new Error("no provider/model available for the handoff summary");
-    // Replaying the prefix only reuses the provider cache when the auxiliary
-    // request carries the same routing knobs as the routed one. Strata writes
-    // the reasoning directive into the prefix, so a missing effort breaks the
-    // cache a few thousand tokens in. Only inherit it when the summary target
-    // is the same model that produced the latest request.
-    const sameTarget = latest !== undefined && target.provider === latest.provider && target.model === latest.model;
-    const reasoningEffort = sameTarget ? latest.reasoningEffort : undefined;
-
-    const resolved = this.handoff.instruction === undefined
-      ? readTemplate(this.handoff.templateFile, this.handoff.autoCreateTemplate)
-      : { text: this.handoff.instruction, source: "config handoffInstruction" };
-    const instruction = typeof resolved.text === "string" && resolved.text.trim().length > 0
-      ? resolved.text
-      : BUILTIN_INSTRUCTION;
-    this.log(`template: ${resolved.source}${resolved.text === undefined ? " (fallback)" : ""}`);
-
-    const expected = expectedSections(instruction);
-    const baseMessages = [
-      ...input.messages,
-      Object.freeze({ role: "user", content: [{ type: "text", text: instruction }] }),
-    ];
-    const baseOptions = {
-      provider: target.provider,
-      model: target.model,
-      toolHistory: agent.session.toolHistory(),
-      ...(input.tools === undefined ? {} : { tools: [...input.tools] }),
-      maxTokens: this.config.maxTokens,
-      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-      sessionId: agent.session.id,
-      purpose: "compaction",
-      ...(signal === undefined ? {} : { signal }),
-    };
-    const sessionId = agent.session?.id;
-
-    let combined = "";
-    let rawOutput = [];
-    let usage;
-    let validation = {
-      ok: expected.length === 0,
-      missing: [...expected],
-      truncated: false,
-      endsWithHeading: false,
-      reason: "not attempted",
-    };
-    const attempts = [];
-
-    let liveTotalTokens;
-    try { liveTotalTokens = this.ctx.tokenMeter.measure(agent.session).totalTokens; } catch { liveTotalTokens = undefined; }
-    writeStatus(sessionId, {
-      phase: "running",
-      step: "summary",
-      summaryAttempt: 1,
-      retrying: false,
-      writing: false,
-      missingSections: [],
-      ...(typeof liveTotalTokens === "number" ? { totalTokens: liveTotalTokens } : {}),
-    });
-
-    for (let attempt = 1; attempt <= MAX_SUMMARY_ATTEMPTS; attempt += 1) {
-      signal?.throwIfAborted?.();
-      const messages = attempt === 1
-        ? baseMessages
-        : attempt === 2
-          ? [
-            ...baseMessages,
-            Object.freeze({ role: "assistant", content: [{ type: "text", text: combined }] }),
-            Object.freeze({ role: "user", content: [{ type: "text", text: continuationInstruction(validation) }] }),
-          ]
-          : [
-            ...baseMessages,
-            Object.freeze({
-              role: "user",
-              content: [{ type: "text", text: rewriteInstruction(validation, this.config.maxTokens) }],
-            }),
-          ];
-
-      const result = await this.runSummaryRequest(baseOptions, messages);
-      const truncatedNow = looksTruncated(result.text);
-      const clean = stripTruncationMarkers(result.text);
-      combined = attempt === 1
-        ? clean
-        : attempt === 2
-          ? mergeSummary(combined, clean)
-          : clean;
-      rawOutput = result.rawOutput;
-      usage = mergeUsage(usage, result.usage);
-      validation = validateSummary(combined, expected);
-      if (truncatedNow) {
-        validation = {
-          ...validation,
-          ok: false,
-          truncated: true,
-          reason: validation.reason.length > 0 ? `${validation.reason}; truncation marker` : "truncation marker",
-        };
-      }
-      attempts.push({
-        attempt,
-        finish: result.finishKind,
-        chars: result.text.length,
-        ok: validation.ok,
-      });
-      if (validation.ok) break;
-      if (attempt < MAX_SUMMARY_ATTEMPTS) {
-        const next = attempt + 1;
-        this.log(`summary incomplete after attempt ${attempt}: ${validation.reason}; ${attempt === 1 ? "continuing" : "rewriting"}`);
-        writeStatus(sessionId, {
-          phase: "running",
-          step: "summary",
-          summaryAttempt: next,
-          retrying: true,
-          writing: next === MAX_SUMMARY_ATTEMPTS,
-          missingSections: validation.missing,
-          summaryChars: combined.length,
-          summaryAttempts: attempts,
-        });
-      }
-    }
-
-    if (!validation.ok) {
-      const error = new Error(`handoff summary incomplete after ${attempts.length} attempt(s): ${validation.reason}`);
-      error.code = "INCOMPLETE_SUMMARY";
-      error.attempts = attempts;
-      throw error;
-    }
-
-    const finalText = combined.trim();
-    if (finalText.length === 0) throw new Error("handoff summary produced no text content");
-    writeStatus(sessionId, {
-      phase: "running",
-      step: "commit",
-      summaryAttempt: attempts.length,
-      retrying: false,
-      writing: false,
-      missingSections: [],
-      summaryChars: finalText.length,
-      summaryAttempts: attempts,
-    });
-
-    return {
-      summary: [{ type: "text", text: finalText }],
-      rawOutput,
-      llmStreamCall: true,
-      provider: target.provider,
-      model: target.model,
-      maxTokens: this.config.maxTokens,
-      ...(usage === undefined ? {} : { usage }),
-    };
-  }
-
-  /** One summary LLM call; max-tokens is returned as a partial, not thrown. */
-  async runSummaryRequest(baseOptions, messages) {
-    const assembler = new BlockAssembler();
-    for await (const chunk of this.ctx.llm.stream({ ...baseOptions, messages })) assembler.push(chunk);
-    const finish = assembler.finish ?? { kind: "stop" };
-    if (finish.kind === "error" || finish.kind === "aborted") {
-      const error = finishError(finish);
-      if (error !== undefined) throw error;
-    }
-    const rawOutput = assembler.blocks();
-    if (contentHasImage(rawOutput)) throw new LlmError("handoff summary cannot contain image output", "UNSUPPORTED_CONTENT");
-    const text = rawOutput.filter((block) => block.type === "text").map((block) => block.text).join("");
-    if (text.trim().length === 0) throw new Error("handoff summary produced no text content");
-    return {
-      rawOutput,
-      text,
-      finishKind: finish.kind,
-      usage: assembler.usage,
-    };
-  }
+  });
 }

@@ -1,4 +1,4 @@
-# dsh-auto-compaction-ui bundle patch.
+# dsh-auto-compaction bundle patch.
 # Mounts the settings-card node half at profile level so its client bundle is
 # loaded. The row name MUST equal the package name (same convention as
 # dsh-rewind-plugin): the client-modules node half resolves
@@ -6,5 +6,5 @@
 # The node half registers NO service, so it can never collide with the engine's
 # `ctx.compaction` provider.
 - insert:
-    - id: dsh-auto-compaction-ui
-      name: dsh-auto-compaction-ui
+    - id: dsh-auto-compaction
+      name: dsh-auto-compaction

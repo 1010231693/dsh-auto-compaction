@@ -1,5 +1,5 @@
 - id: compaction-basic
-  name: "dsh-auto-compaction"
+  name: "dsh-auto-compaction-engine"
   config:
     thresholdRatio: 0.9
     headroomTokens: 10000

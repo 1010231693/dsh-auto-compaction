@@ -356,7 +356,7 @@ for (const entry of plan) {
 
   if (mode === "status") {
     const current = activeName(lines);
-    const kind = current === "dsh-handoff-compaction" || current === "dsh-auto-compaction" ? "插件接管（原生关闭）"
+    const kind = current === "dsh-handoff-compaction" || current === "dsh-auto-compaction" || current === "dsh-auto-compaction-engine" ? "插件接管（原生关闭）"
       : current === "@deepseek-ai/dsh-compaction-basic" ? "DSH 原生压缩"
       : "未知";
     const selected = entry.selected === undefined ? "" : `\n  勾选: ${entry.selected ? "是（插件）" : "否（原生）"}`;

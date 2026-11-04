@@ -1,16 +1,28 @@
 {
   "name": "dsh-auto-compaction",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
-    "./lib/*": "./lib/*",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
-  "description": "A session auto-compaction plugin that is friendly to local models: compaction never makes the local engine re-read history, saving a lot of time; the trigger point and the saved content of the compacted session are user-configurable.",
+  "description": "Settings page (设置 → 会话压缩) for A session auto-compaction plugin that is friendly to local models: compaction never makes the local engine re-read history, saving a lot of time; the trigger point and the saved content of the compacted session are user-configurable.",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   },
   "license": "MIT",
   "repository": {
@@ -28,20 +40,17 @@
     "cordis",
     "plugin",
     "compaction",
-    "context",
-    "handoff",
-    "llm",
-    "local-llm"
+    "settings-ui"
   ],
   "files": [
     "lib",
-    "scripts",
+    "cordis.patch.yml",
     "README.md"
   ],
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "dsh-auto-compaction-engine": "^0.2.0"
   }
 }
