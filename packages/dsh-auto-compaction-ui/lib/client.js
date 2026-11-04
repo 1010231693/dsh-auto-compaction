@@ -384,8 +384,8 @@ window.__ModuleLoader__.load({
           justifyContent: "center",
           boxSizing: "border-box",
           paddingLeft: "min(200px, 15vw)",
-          background: "radial-gradient(circle at 55% 45%, rgba(8,9,11,.55), rgba(8,9,11,.18) 55%, transparent 78%)",
-          backdropFilter: "blur(1.5px)",
+          // The overlay never blocks input, so no blur or dim: a modal-looking
+          // scrim here would falsely suggest the conversation is frozen.
         };
         var cardStyle = {
           width: 260,
@@ -495,7 +495,7 @@ window.__ModuleLoader__.load({
       ];
       var overlay = null;
       if (style === "ring") {
-        overlay = h("div", { style: { position: "absolute", inset: 0, background: "rgba(8,9,11,.58)", display: "flex", alignItems: "center", justifyContent: "center" } },
+        overlay = h("div", { style: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" } },
           h("div", { style: { width: 104, border: "1px solid " + C.line, borderRadius: 8, background: "#23252a", padding: "7px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" } },
             h("div", { style: { position: "relative", width: 28, height: 28 } },
               h("div", { style: { width: 28, height: 28, borderRadius: "50%", background: "conic-gradient(" + C.accent + " 0 66%, #2c2e33 66% 100%)", WebkitMask: "radial-gradient(circle, transparent 52%, #000 55%)", mask: "radial-gradient(circle, transparent 52%, #000 55%)" } }),
@@ -506,7 +506,7 @@ window.__ModuleLoader__.load({
           )
         );
       } else if (style === "orbit") {
-        overlay = h("div", { style: { position: "absolute", inset: 0, background: "rgba(8,9,11,.58)", display: "flex", alignItems: "center", justifyContent: "center" } },
+        overlay = h("div", { style: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" } },
           h("div", { style: { width: 104, border: "1px solid " + C.line, borderRadius: 8, background: "#23252a", padding: "7px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, textAlign: "center" } },
             h("div", { className: "dsh-handoff-mini-orbit" },
               h("span", { style: { position: "absolute", left: "50%", top: "50%", width: 4, height: 4, margin: "-2px 0 0 -2px", borderRadius: "50%", background: C.accent } })
