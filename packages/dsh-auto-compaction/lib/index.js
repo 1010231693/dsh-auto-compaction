@@ -295,21 +295,6 @@ export function apply(ctx, config = {}) {
               ? { ok: true, value: state.value }
               : { ok: false, error: { code: "auto-compaction/scope-unknown", message: state.message } };
           }
-          if (endpoint === "takeover" || endpoint === "release") {
-            const action = endpoint === "takeover" ? "enable" : "disable";
-            const switched = await runScope(action);
-            if (!switched.ok) {
-              return {
-                ok: false,
-                error: { code: "auto-compaction/scope-switch-failed", message: switched.message },
-              };
-            }
-            const state = await readScopeState();
-            if (!state.ok) {
-              return { ok: false, error: { code: "auto-compaction/scope-unknown", message: state.message } };
-            }
-            return { ok: true, value: { ...state.value, switchedOutput: switched.output, noise: switched.noise } };
-          }
           if (endpoint === "open") {
             trace("open " + JSON.stringify(payload));
             return await handleOpen(ctx, String(payload?.kind ?? "file") + ":" + Date.now(), String(payload?.path ?? "") || TEMPLATE_FILE);

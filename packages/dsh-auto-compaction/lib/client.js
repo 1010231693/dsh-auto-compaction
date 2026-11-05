@@ -687,26 +687,25 @@ window.__ModuleLoader__.load({
       var draft = draftState[0], setDraft = draftState[1];
       var statusState = React.useState({ loading: true, error: "", saving: false, saved: false });
       var status = statusState[0], setStatus = statusState[1];
-      var scopeState = React.useState({ loading: true, error: "", value: null, busy: "", note: "" });
+      var scopeState = React.useState({ loading: true, error: "", value: null });
       var scope = scopeState[0], setScope = scopeState[1];
       var tokenState = React.useState(0);
       var token = tokenState[0], setToken = tokenState[1];
       ensureStatusStyles();
 
       // The compaction slot lives in the preset YAML, not in our settings file,
-      // so the truth is read from disk each time the section opens or an action
-      // rewrites it.
+      // so the truth is read from disk each time the section opens.
       React.useEffect(function () {
         if (!connection) {
-          setScope({ loading: false, error: "连接服务不可用", value: null, busy: "", note: "" });
+          setScope({ loading: false, error: "连接服务不可用", value: null });
           return undefined;
         }
         var alive = true;
-        setScope(function (previous) { return { loading: true, error: "", value: previous.value, busy: "", note: "" }; });
+        setScope(function (previous) { return { loading: true, error: "", value: previous.value }; });
         call(connection, "scope").then(function (value) {
-          if (alive) setScope({ loading: false, error: "", value: value, busy: "", note: "" });
+          if (alive) setScope({ loading: false, error: "", value: value });
         }).catch(function (error) {
-          if (alive) setScope({ loading: false, error: String(error && error.message || error), value: null, busy: "", note: "" });
+          if (alive) setScope({ loading: false, error: String(error && error.message || error), value: null });
         });
         return function () { alive = false; };
       }, [connection, token]);
@@ -737,8 +736,8 @@ window.__ModuleLoader__.load({
       var defaultTemplate = base.defaultTemplate || DEFAULT_TEMPLATE;
       var themeStyle = normalizeDisplayStyle(base.displayStyle);
 
-      // Everything below is composed from the preset YAML, never from this
-      // section's own draft: what the user sees must be what DSH will load.
+      // Detection only: who compacts is decided by the preset slot (read from
+      // disk) times the 启用插件 switch. This row never changes either of them.
       var SCOPE_TONE = {
         native: { dot: "#6b7178", text: C.muted },
         plugin: { dot: C.accent, text: "#cfe0ff" },
@@ -758,7 +757,7 @@ window.__ModuleLoader__.load({
             sub: scope.loading
               ? "正在读取各 Agent 预设里的 compaction 槽位。"
               : "读不到预设里的 compaction 槽位：" + (scope.error || "未知原因") + "。",
-            rows: [], action: "retry", actionLabel: "重新读取",
+            rows: [], retry: true,
           };
         }
         var list = Array.isArray(st.presets) ? st.presets : [];
@@ -769,36 +768,39 @@ window.__ModuleLoader__.load({
           };
         });
         var names = rows.map(function (r) { return r.label; });
+        var takenNames = rows.filter(function (r) { return r.taken; }).map(function (r) { return r.label; });
+        var restNames = rows.filter(function (r) { return !r.taken; }).map(function (r) { return r.label; });
         var taken = Number(st.taken) || 0;
         var total = Number(st.total) || list.length;
         if (total === 0) {
           return {
-            tone: "err", text: "没有可接管的预设", rows: [], action: "retry", actionLabel: "重新读取",
-            sub: "没找到带 handoff 槽位的可编辑预设文件，所以接管按钮不可用。确认 DSH 已生成预设后重新读取。",
+            tone: "err", text: "读不到预设", rows: [], retry: true,
+            sub: "没找到带 handoff 槽位的可编辑预设文件，所以无法判断压缩由谁负责。确认 DSH 已生成预设后重新读取。",
           };
         }
         if (taken === 0) {
           return {
-            tone: "native", text: "原生压缩", rows: rows, action: "takeover", actionLabel: "接管压缩",
-            sub: "插件已安装，但还没有接管——压缩目前走 DSH 原生实现。接管会把 " + names.join("、") + " 的 compaction 槽位指向插件，预设文件写前自动留备份。",
+            tone: "native", text: "DSH 原生压缩", rows: rows, retry: false,
+            sub: "各预设的 compaction 槽位都还在原生实现手里，所以压缩目前由 DSH 自己完成。保存本页设置会自动接管 " + names.join("、") + "（写入预设文件并留备份，重启 DSH 后生效）。",
+          };
+        }
+        if (!enabled) {
+          return {
+            tone: "native", text: "DSH 原生压缩（插件已停用）", rows: rows, retry: false,
+            sub: taken < total
+              ? "「启用插件」已关闭，压缩由 DSH 原生实现负责；" + takenNames.join("、") + " 的槽位仍指向插件，" + restNames.join("、") + " 本来就走原生。"
+              : "「启用插件」已关闭：槽位虽然指向插件，但插件把压缩交回 DSH 原生实现。打开开关即恢复，不需要重启。",
           };
         }
         if (taken < total) {
-          var rest = rows.filter(function (r) { return !r.taken; }).map(function (r) { return r.label; });
           return {
-            tone: "part", text: taken + "/" + total + " 预设已接管", rows: rows, action: "takeover", actionLabel: "接管其余预设",
-            sub: "已交给插件：" + names.filter(function (n, i) { return rows[i].taken; }).join("、") + "；" + rest.join("、") + " 仍走各自的原生压缩。",
-          };
-        }
-        if (st.enabled === false) {
-          return {
-            tone: "part", text: "预设已指向插件，但插件已停用", rows: rows, action: "release", actionLabel: "交回原生",
-            sub: "上面「启用插件」是关的，所以运行时压缩仍走 DSH 原生。打开开关即可生效，不需要重启 DSH。",
+            tone: "part", text: taken + "/" + total + " 预设已接管", rows: rows, retry: false,
+            sub: "已交给插件：" + takenNames.join("、") + "；" + restNames.join("、") + " 仍走各自的原生压缩。",
           };
         }
         return {
-          tone: "plugin", text: "已由插件接管", rows: rows, action: "release", actionLabel: "交回原生",
-          sub: taken + " 个预设（" + names.join("、") + "）的压缩都交给插件；原生实现留在原位，随时可以交回去。",
+          tone: "plugin", text: "已由插件接管", rows: rows, retry: false,
+          sub: taken + " 个预设（" + names.join("、") + "）的 compaction 槽位指向插件，且「启用插件」是开的，压缩由本插件的交接文档负责。",
         };
       })();
       var scopeTone = SCOPE_TONE[scopeView.tone] || SCOPE_TONE.native;
@@ -813,6 +815,10 @@ window.__ModuleLoader__.load({
         JSON.stringify(settings.presets || []) !== JSON.stringify(presets) ||
         (settings.templateFile || "") !== template ||
         normalizeDisplayStyle(settings.displayStyle) !== themeStyle;
+
+      // The detection line follows the switch, so it must say so while the
+      // switch is still unsaved — the engine only sees what is on disk.
+      var enabledIsPending = settings !== null && (settings.enabled !== false) !== enabled;
 
       function patch(next) { setDraft(Object.assign({}, base, next)); setStatus({ loading: false, error: "", saving: false, saved: false }); }
       function setPreset(id) {
@@ -838,17 +844,6 @@ window.__ModuleLoader__.load({
         });
       }
 
-      function switchScope(action) {
-        setScope({ loading: false, error: "", value: scope.value, busy: action, note: "" });
-        call(connection, action, {}).then(function (value) {
-          setScope({
-            loading: false, error: "", value: value, busy: "",
-            note: "已写入预设文件，重启 DSH 后生效。",
-          });
-        }).catch(function (error) {
-          setScope({ loading: false, error: String(error && error.message || error), value: scope.value, busy: "", note: "" });
-        });
-      }
       function discard() { setDraft(settings); setStatus({ loading: false, error: "", saving: false, saved: false }); }
       function open(kind) {
         call(connection, "open", { kind: kind, path: template }).then(function () {
@@ -903,26 +898,24 @@ window.__ModuleLoader__.load({
                 })
               )
               : null,
-            scope.note ? h("div", { style: { fontSize: 11.5, color: "#57c785", marginTop: 6 } }, scope.note) : null,
-            scope.error && scope.value ? h("div", { style: { fontSize: 11.5, color: "#e5534b", marginTop: 6 } }, "最近一次操作失败：" + scope.error) : null
+            enabledIsPending
+              ? h("div", { style: { fontSize: 11.5, color: "#d29922", marginTop: 6 } },
+                "开关还没保存：点下方「保存」后才会真的按「" + (enabled ? "启用" : "停用") + "」执行。")
+              : null,
+            scope.error && scope.value ? h("div", { style: { fontSize: 11.5, color: "#e5534b", marginTop: 6 } }, "读取失败：" + scope.error) : null
           ),
           h("div", { style: { display: "inline-flex", alignItems: "center", gap: 12, flex: "0 0 auto" } },
             h("span", { "aria-live": "polite", style: { display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5, color: scopeTone.text } },
               h("i", { "aria-hidden": true, style: { width: 7, height: 7, borderRadius: "50%", background: scopeTone.dot } }),
               scopeView.text
             ),
-            h("button", {
-              type: "button",
-              disabled: scope.loading || scope.busy !== "" || scopeView.action === "",
-              onClick: function () {
-                if (scopeView.action === "retry") { setToken(token + 1); return; }
-                switchScope(scopeView.action);
-              },
-              style: Object.assign({}, scopeView.action === "release" ? btnBase : btnPrimary, {
-                opacity: (scope.loading || scope.busy !== "" || scopeView.action === "") ? 0.55 : 1,
-                cursor: (scope.loading || scope.busy !== "" || scopeView.action === "") ? "default" : "pointer",
-              }),
-            }, scope.busy !== "" ? "处理中…" : scopeView.actionLabel)
+            scopeView.retry && !scope.loading
+              ? h("button", {
+                type: "button",
+                onClick: function () { setToken(token + 1); },
+                style: Object.assign({}, btnBase, { fontSize: 11.5, padding: "4px 9px" }),
+              }, "重新读取")
+              : null
           )
         ),
 
