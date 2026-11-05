@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-compaction",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -51,6 +51,6 @@
     "access": "public"
   },
   "dependencies": {
-    "dsh-auto-compaction-engine": "^0.2.1"
+    "dsh-auto-compaction-engine": "^0.2.2"
   }
 }
