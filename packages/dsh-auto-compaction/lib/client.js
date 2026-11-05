@@ -43,6 +43,10 @@ window.__ModuleLoader__.load({
       { id: "topbar", label: "顶部条" },
       { id: "corner", label: "右上角" },
     ];
+    function presetLabel(id) {
+      for (var i = 0; i < PRESETS.length; i += 1) if (PRESETS[i].id === id) return PRESETS[i].label;
+      return String(id || "未命名预设");
+    }
     var EXAMPLE_WINDOW = 250000, EXAMPLE_RESERVED = 20000, EXAMPLE_HEADROOM = 10000;
 
     var DISPLAY_STYLES = ["orbit", "strip", "ring", "topbar", "corner"];
@@ -746,10 +750,6 @@ window.__ModuleLoader__.load({
       };
       var scopeView = (function () {
         var st = scope.value;
-        var labelOf = function (id) {
-          for (var i = 0; i < PRESETS.length; i += 1) if (PRESETS[i].id === id) return PRESETS[i].label;
-          return String(id || "未命名预设");
-        };
         if (!st) {
           return {
             tone: "err",
@@ -763,7 +763,7 @@ window.__ModuleLoader__.load({
         var list = Array.isArray(st.presets) ? st.presets : [];
         var rows = list.map(function (p) {
           return {
-            key: String(p.id), label: labelOf(p.id), taken: p.owner === "plugin",
+            key: String(p.id), label: presetLabel(p.id), taken: p.owner === "plugin",
             owner: p.owner === "plugin" ? "插件" : p.owner === "native" ? "原生" : "未知",
           };
         });
@@ -772,6 +772,10 @@ window.__ModuleLoader__.load({
         var restNames = rows.filter(function (r) { return !r.taken; }).map(function (r) { return r.label; });
         var taken = Number(st.taken) || 0;
         var total = Number(st.total) || list.length;
+        var globalSaved = st.scope !== "preset";
+        var scopeLead = globalSaved
+          ? "全局生效："
+          : "按预设生效：";
         if (total === 0) {
           return {
             tone: "err", text: "读不到预设", rows: [], retry: true,
@@ -795,12 +799,17 @@ window.__ModuleLoader__.load({
         if (taken < total) {
           return {
             tone: "part", text: taken + "/" + total + " 预设已接管", rows: rows, retry: false,
-            sub: "已交给插件：" + takenNames.join("、") + "；" + restNames.join("、") + " 仍走各自的原生压缩。",
+            sub: scopeLead + "已交给插件：" + takenNames.join("、") + "；" + restNames.join("、") + " 仍走各自的原生压缩。",
           };
         }
         return {
-          tone: "plugin", text: "已由插件接管", rows: rows, retry: false,
-          sub: taken + " 个预设（" + names.join("、") + "）的 compaction 槽位指向插件，且「启用插件」是开的，压缩由本插件的交接文档负责。",
+          tone: "plugin",
+          text: globalSaved ? "已由插件接管（全局）" : "已由插件接管",
+          rows: rows, retry: false,
+          sub: scopeLead + (globalSaved
+            ? "这 " + total + " 个带 handoff 槽位的可编辑预设（" + names.join("、") + "）"
+            : "勾选的 " + taken + " 个预设（" + takenNames.join("、") + "）")
+            + "的 compaction 槽位指向插件，且「启用插件」是开的，压缩由本插件的交接文档负责。",
         };
       })();
       var scopeTone = SCOPE_TONE[scopeView.tone] || SCOPE_TONE.native;
@@ -816,9 +825,19 @@ window.__ModuleLoader__.load({
         (settings.templateFile || "") !== template ||
         normalizeDisplayStyle(settings.displayStyle) !== themeStyle;
 
-      // The detection line follows the switch, so it must say so while the
-      // switch is still unsaved — the engine only sees what is on disk.
+      // The detection row reports what is on disk, so every unsaved choice that
+      // would change that report has to be named — otherwise it looks ignored.
       var enabledIsPending = settings !== null && (settings.enabled !== false) !== enabled;
+      var scopeIsPending = settings !== null && (settings.scope === "preset") !== scopePreset;
+      var presetsIsPending = settings !== null && scopePreset &&
+        JSON.stringify(presets.slice().sort()) !== JSON.stringify((settings.presets || []).slice().sort());
+      var pendingParts = [];
+      if (enabledIsPending) pendingParts.push("「启用插件」改成" + (enabled ? "开" : "关"));
+      if (scopeIsPending) pendingParts.push("生效范围改成「" + (scopePreset ? "按预设生效" : "全局生效") + "」");
+      if (presetsIsPending) pendingParts.push("勾选的预设改成" + (presets.length ? presets.map(presetLabel).join("、") : "（都不勾）"));
+      var pendingNote = pendingParts.length
+        ? "还没保存：" + pendingParts.join("；") + "。保存后开关立刻生效，槽位改动要重启 DSH 才加载。"
+        : "";
 
       function patch(next) { setDraft(Object.assign({}, base, next)); setStatus({ loading: false, error: "", saving: false, saved: false }); }
       function setPreset(id) {
@@ -885,41 +904,6 @@ window.__ModuleLoader__.load({
         ),
 
         h("div", { style: rowStyle },
-          h("div", { style: { minWidth: 0 } },
-            h("div", { style: labelStyle }, "当前生效情况"),
-            h("div", { style: subStyle }, scopeView.sub),
-            scopeView.rows.length
-              ? h("div", { style: { display: "flex", gap: "6px 16px", flexWrap: "wrap", marginTop: 7 } },
-                scopeView.rows.map(function (r) {
-                  return h("span", { key: r.key, style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: C.muted } },
-                    h("i", { "aria-hidden": true, style: { width: 6, height: 6, borderRadius: "50%", background: r.taken ? C.accent : "#6b7178" } }),
-                    r.label,
-                    h("em", { style: { fontStyle: "normal", color: C.faint } }, r.owner));
-                })
-              )
-              : null,
-            enabledIsPending
-              ? h("div", { style: { fontSize: 11.5, color: "#d29922", marginTop: 6 } },
-                "开关还没保存：点下方「保存」后才会真的按「" + (enabled ? "启用" : "停用") + "」执行。")
-              : null,
-            scope.error && scope.value ? h("div", { style: { fontSize: 11.5, color: "#e5534b", marginTop: 6 } }, "读取失败：" + scope.error) : null
-          ),
-          h("div", { style: { display: "inline-flex", alignItems: "center", gap: 12, flex: "0 0 auto" } },
-            h("span", { "aria-live": "polite", style: { display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5, color: scopeTone.text } },
-              h("i", { "aria-hidden": true, style: { width: 7, height: 7, borderRadius: "50%", background: scopeTone.dot } }),
-              scopeView.text
-            ),
-            scopeView.retry && !scope.loading
-              ? h("button", {
-                type: "button",
-                onClick: function () { setToken(token + 1); },
-                style: Object.assign({}, btnBase, { fontSize: 11.5, padding: "4px 9px" }),
-              }, "重新读取")
-              : null
-          )
-        ),
-
-        h("div", { style: rowStyle },
           h("div", null,
             h("div", { style: labelStyle }, "生效范围"),
             h("div", { style: subStyle }, scopePreset ? "仅勾选的预设切到插件并关闭其原生压缩；其余预设保持原生" : "所有带 handoff slot 的可编辑预设都切到插件，共用这份设置")
@@ -938,6 +922,38 @@ window.__ModuleLoader__.load({
             }, p.label);
           })
         ) : null,
+
+        h("div", { style: rowStyle },
+          h("div", { style: { minWidth: 0 } },
+            h("div", { style: labelStyle }, "当前生效情况"),
+            h("div", { style: subStyle }, scopeView.sub),
+            scopeView.rows.length
+              ? h("div", { style: { display: "flex", gap: "6px 16px", flexWrap: "wrap", marginTop: 7 } },
+                scopeView.rows.map(function (r) {
+                  return h("span", { key: r.key, style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: C.muted } },
+                    h("i", { "aria-hidden": true, style: { width: 6, height: 6, borderRadius: "50%", background: r.taken ? C.accent : "#6b7178" } }),
+                    r.label,
+                    h("em", { style: { fontStyle: "normal", color: C.faint } }, r.owner));
+                })
+              )
+              : null,
+            pendingNote ? h("div", { style: { fontSize: 11.5, color: "#d29922", marginTop: 6 } }, pendingNote) : null,
+            scope.error && scope.value ? h("div", { style: { fontSize: 11.5, color: "#e5534b", marginTop: 6 } }, "读取失败：" + scope.error) : null
+          ),
+          h("div", { style: { display: "inline-flex", alignItems: "center", gap: 12, flex: "0 0 auto" } },
+            h("span", { "aria-live": "polite", style: { display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5, color: scopeTone.text } },
+              h("i", { "aria-hidden": true, style: { width: 7, height: 7, borderRadius: "50%", background: scopeTone.dot } }),
+              scopeView.text
+            ),
+            scopeView.retry && !scope.loading
+              ? h("button", {
+                type: "button",
+                onClick: function () { setToken(token + 1); },
+                style: Object.assign({}, btnBase, { fontSize: 11.5, padding: "4px 9px" }),
+              }, "重新读取")
+              : null
+          )
+        ),
 
         h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
           h("div", null,
