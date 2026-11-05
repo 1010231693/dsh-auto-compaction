@@ -21,6 +21,7 @@
  *
  * Usage:
  *   node scripts/preset-scope.mjs status  [--preset <cordis.patch.yml>] [--profile-patch <cordis.patch.yml>] [--all-local] [--skip-profile]
+ *   node scripts/preset-scope.mjs state   [--preset <cordis.patch.yml>] [--profile-patch <cordis.patch.yml>]  # one JSON line
  *   node scripts/preset-scope.mjs enable  [--preset <cordis.patch.yml>] [--profile-patch <cordis.patch.yml>] [--all-local] [--skip-profile]
  *   node scripts/preset-scope.mjs disable [--preset <cordis.patch.yml>] [--profile-patch <cordis.patch.yml>] [--all-local] [--skip-profile]
  * Restart DSH afterwards.
@@ -334,8 +335,72 @@ function profileStatus() {
   console.log(`${profilePatch}\n  原生守卫: ${guardState(lines, bounds)}\n  YAML: ${validateProfile(original)}`);
 }
 
+const PLUGIN_ROWS = new Set(["dsh-auto-compaction-engine", "dsh-auto-compaction", "dsh-handoff-compaction"]);
+
+/** Which compaction implementation a preset's slot currently names. */
+function ownerOf(row) {
+  if (PLUGIN_ROWS.has(row)) return "plugin";
+  if (row === "@deepseek-ai/dsh-compaction-basic") return "native";
+  return "unknown";
+}
+
+/** Profile-level native fallback: "off" means the plugin guard is holding it. */
+function rootGuardState() {
+  if (!fs.existsSync(profilePatch)) return "missing";
+  const lines = fs.readFileSync(profilePatch, "utf8").split(/\r?\n/);
+  const bounds = nativeBounds(lines);
+  if (bounds === undefined) return "missing";
+  const state = guardState(lines, bounds);
+  if (state.startsWith("auto:false")) return "off";
+  if (state.startsWith("absent") || state.startsWith("auto:true")) return "on";
+  return "other";
+}
+
+/**
+ * Machine-readable takeover report, one entry per editable preset. The settings
+ * page renders this verbatim instead of guessing from its own config: the YAML
+ * on disk is what decides who compacts.
+ */
+function stateReport() {
+  const settings = readSettings() ?? {};
+  const selected = new Set(Array.isArray(settings.presets) ? settings.presets : []);
+  const files = presetArg >= 0 ? [argv[presetArg + 1]] : discoverPresetFiles();
+  const presets = [];
+  for (const file of files) {
+    let text;
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    const lines = text.split(/\r?\n/);
+    const id = presetIdOf(text) ?? path.basename(path.dirname(file));
+    const row = activeName(lines);
+    presets.push({
+      id,
+      file,
+      row,
+      owner: slotBounds(lines) === undefined ? "no-slot" : ownerOf(row),
+      selected: settings.scope === "global" ? true : selected.has(id),
+    });
+  }
+  return {
+    enabled: settings.enabled !== false,
+    scope: settings.scope === "preset" ? "preset" : "global",
+    presets,
+    taken: presets.filter((entry) => entry.owner === "plugin").length,
+    total: presets.length,
+    rootGuard: rootGuardState(),
+  };
+}
+
+if (mode === "state") {
+  console.log(JSON.stringify(stateReport()));
+  process.exit(0);
+}
+
 if (mode !== "status" && mode !== "enable" && mode !== "disable") {
-  console.error("usage: preset-scope.mjs <status|enable|disable> [--preset <file>] [--profile-patch <file>] [--all-local] [--skip-profile]");
+  console.error("usage: preset-scope.mjs <status|state|enable|disable> [--preset <file>] [--profile-patch <file>] [--all-local] [--skip-profile]");
   process.exit(2);
 }
 

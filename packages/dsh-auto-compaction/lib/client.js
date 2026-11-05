@@ -480,7 +480,7 @@ window.__ModuleLoader__.load({
               indicator,
               h("div", { style: { fontSize: 12.5, fontWeight: 600, color: STATUS_TEXT } }, title),
               h("div", { style: { fontSize: 11, color: STATUS_MUTED } }, cardSub),
-              h("div", { style: { fontSize: 10.5, color: STATUS_MUTED, opacity: 0.85 } }, "完成后整段历史收成一条交接文档")
+              h("div", { style: { fontSize: 10.5, color: STATUS_MUTED, opacity: 0.85 } }, "完成后把最旧的这段历史收成一条交接文档")
             )
           ),
           document.body
@@ -687,7 +687,29 @@ window.__ModuleLoader__.load({
       var draft = draftState[0], setDraft = draftState[1];
       var statusState = React.useState({ loading: true, error: "", saving: false, saved: false });
       var status = statusState[0], setStatus = statusState[1];
+      var scopeState = React.useState({ loading: true, error: "", value: null, busy: "", note: "" });
+      var scope = scopeState[0], setScope = scopeState[1];
+      var tokenState = React.useState(0);
+      var token = tokenState[0], setToken = tokenState[1];
       ensureStatusStyles();
+
+      // The compaction slot lives in the preset YAML, not in our settings file,
+      // so the truth is read from disk each time the section opens or an action
+      // rewrites it.
+      React.useEffect(function () {
+        if (!connection) {
+          setScope({ loading: false, error: "连接服务不可用", value: null, busy: "", note: "" });
+          return undefined;
+        }
+        var alive = true;
+        setScope(function (previous) { return { loading: true, error: "", value: previous.value, busy: "", note: "" }; });
+        call(connection, "scope").then(function (value) {
+          if (alive) setScope({ loading: false, error: "", value: value, busy: "", note: "" });
+        }).catch(function (error) {
+          if (alive) setScope({ loading: false, error: String(error && error.message || error), value: null, busy: "", note: "" });
+        });
+        return function () { alive = false; };
+      }, [connection, token]);
 
       React.useEffect(function () {
         var alive = true;
@@ -714,6 +736,72 @@ window.__ModuleLoader__.load({
       var template = base.templateFile || "";
       var defaultTemplate = base.defaultTemplate || DEFAULT_TEMPLATE;
       var themeStyle = normalizeDisplayStyle(base.displayStyle);
+
+      // Everything below is composed from the preset YAML, never from this
+      // section's own draft: what the user sees must be what DSH will load.
+      var SCOPE_TONE = {
+        native: { dot: "#6b7178", text: C.muted },
+        plugin: { dot: C.accent, text: "#cfe0ff" },
+        part: { dot: "#d29922", text: "#e6c98a" },
+        err: { dot: "#e5534b", text: "#f0b8b4" },
+      };
+      var scopeView = (function () {
+        var st = scope.value;
+        var labelOf = function (id) {
+          for (var i = 0; i < PRESETS.length; i += 1) if (PRESETS[i].id === id) return PRESETS[i].label;
+          return String(id || "未命名预设");
+        };
+        if (!st) {
+          return {
+            tone: "err",
+            text: scope.loading ? "读取中…" : "读不到生效情况",
+            sub: scope.loading
+              ? "正在读取各 Agent 预设里的 compaction 槽位。"
+              : "读不到预设里的 compaction 槽位：" + (scope.error || "未知原因") + "。",
+            rows: [], action: "retry", actionLabel: "重新读取",
+          };
+        }
+        var list = Array.isArray(st.presets) ? st.presets : [];
+        var rows = list.map(function (p) {
+          return {
+            key: String(p.id), label: labelOf(p.id), taken: p.owner === "plugin",
+            owner: p.owner === "plugin" ? "插件" : p.owner === "native" ? "原生" : "未知",
+          };
+        });
+        var names = rows.map(function (r) { return r.label; });
+        var taken = Number(st.taken) || 0;
+        var total = Number(st.total) || list.length;
+        if (total === 0) {
+          return {
+            tone: "err", text: "没有可接管的预设", rows: [], action: "retry", actionLabel: "重新读取",
+            sub: "没找到带 handoff 槽位的可编辑预设文件，所以接管按钮不可用。确认 DSH 已生成预设后重新读取。",
+          };
+        }
+        if (taken === 0) {
+          return {
+            tone: "native", text: "原生压缩", rows: rows, action: "takeover", actionLabel: "接管压缩",
+            sub: "插件已安装，但还没有接管——压缩目前走 DSH 原生实现。接管会把 " + names.join("、") + " 的 compaction 槽位指向插件，预设文件写前自动留备份。",
+          };
+        }
+        if (taken < total) {
+          var rest = rows.filter(function (r) { return !r.taken; }).map(function (r) { return r.label; });
+          return {
+            tone: "part", text: taken + "/" + total + " 预设已接管", rows: rows, action: "takeover", actionLabel: "接管其余预设",
+            sub: "已交给插件：" + names.filter(function (n, i) { return rows[i].taken; }).join("、") + "；" + rest.join("、") + " 仍走各自的原生压缩。",
+          };
+        }
+        if (st.enabled === false) {
+          return {
+            tone: "part", text: "预设已指向插件，但插件已停用", rows: rows, action: "release", actionLabel: "交回原生",
+            sub: "上面「启用插件」是关的，所以运行时压缩仍走 DSH 原生。打开开关即可生效，不需要重启 DSH。",
+          };
+        }
+        return {
+          tone: "plugin", text: "已由插件接管", rows: rows, action: "release", actionLabel: "交回原生",
+          sub: taken + " 个预设（" + names.join("、") + "）的压缩都交给插件；原生实现留在原位，随时可以交回去。",
+        };
+      })();
+      var scopeTone = SCOPE_TONE[scopeView.tone] || SCOPE_TONE.native;
 
       var budget = EXAMPLE_WINDOW - EXAMPLE_RESERVED;
       var ceiling = budget - EXAMPLE_HEADROOM;
@@ -744,8 +832,21 @@ window.__ModuleLoader__.load({
           setSettings(value); setDraft(value);
           publishDisplayStyle(value && value.displayStyle);
           setStatus({ loading: false, error: "", saving: false, saved: true });
+          setToken(token + 1);
         }).catch(function (error) {
           setStatus({ loading: false, error: String(error && error.message || error), saving: false, saved: false });
+        });
+      }
+
+      function switchScope(action) {
+        setScope({ loading: false, error: "", value: scope.value, busy: action, note: "" });
+        call(connection, action, {}).then(function (value) {
+          setScope({
+            loading: false, error: "", value: value, busy: "",
+            note: "已写入预设文件，重启 DSH 后生效。",
+          });
+        }).catch(function (error) {
+          setScope({ loading: false, error: String(error && error.message || error), value: scope.value, busy: "", note: "" });
         });
       }
       function discard() { setDraft(settings); setStatus({ loading: false, error: "", saving: false, saved: false }); }
@@ -786,6 +887,43 @@ window.__ModuleLoader__.load({
             label: "启用插件",
             onChange: function (value) { patch({ enabled: value }); },
           })
+        ),
+
+        h("div", { style: rowStyle },
+          h("div", { style: { minWidth: 0 } },
+            h("div", { style: labelStyle }, "当前生效情况"),
+            h("div", { style: subStyle }, scopeView.sub),
+            scopeView.rows.length
+              ? h("div", { style: { display: "flex", gap: "6px 16px", flexWrap: "wrap", marginTop: 7 } },
+                scopeView.rows.map(function (r) {
+                  return h("span", { key: r.key, style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: C.muted } },
+                    h("i", { "aria-hidden": true, style: { width: 6, height: 6, borderRadius: "50%", background: r.taken ? C.accent : "#6b7178" } }),
+                    r.label,
+                    h("em", { style: { fontStyle: "normal", color: C.faint } }, r.owner));
+                })
+              )
+              : null,
+            scope.note ? h("div", { style: { fontSize: 11.5, color: "#57c785", marginTop: 6 } }, scope.note) : null,
+            scope.error && scope.value ? h("div", { style: { fontSize: 11.5, color: "#e5534b", marginTop: 6 } }, "最近一次操作失败：" + scope.error) : null
+          ),
+          h("div", { style: { display: "inline-flex", alignItems: "center", gap: 12, flex: "0 0 auto" } },
+            h("span", { "aria-live": "polite", style: { display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5, color: scopeTone.text } },
+              h("i", { "aria-hidden": true, style: { width: 7, height: 7, borderRadius: "50%", background: scopeTone.dot } }),
+              scopeView.text
+            ),
+            h("button", {
+              type: "button",
+              disabled: scope.loading || scope.busy !== "" || scopeView.action === "",
+              onClick: function () {
+                if (scopeView.action === "retry") { setToken(token + 1); return; }
+                switchScope(scopeView.action);
+              },
+              style: Object.assign({}, scopeView.action === "release" ? btnBase : btnPrimary, {
+                opacity: (scope.loading || scope.busy !== "" || scopeView.action === "") ? 0.55 : 1,
+                cursor: (scope.loading || scope.busy !== "" || scopeView.action === "") ? "default" : "pointer",
+              }),
+            }, scope.busy !== "" ? "处理中…" : scopeView.actionLabel)
+          )
         ),
 
         h("div", { style: rowStyle },
@@ -881,8 +1019,8 @@ window.__ModuleLoader__.load({
           h("ol", { style: { margin: 0, paddingLeft: 18, color: C.muted, fontSize: 12.5, lineHeight: 1.85 } },
             h("li", null, "到点后不立即动手，等 agent 结束当前回合。"),
             h("li", null, "用会话自己的前缀（命中缓存）让模型按模板写交接文档，不额外全量 prefill。"),
-            h("li", null, "把整段历史替换成这一条消息；旧消息仍在会话日志里，rewind 可回滚。"),
-            h("li", null, "下一轮只剩 系统提示词 + 工具定义 + 交接文档。")
+            h("li", null, "只替换最旧的这一段历史，换成一条交接文档；最近约 16% 窗口的原文逐字留着，切点也不会把工具调用和它的结果拆开。"),
+            h("li", null, "下一轮 = 系统提示词 + 工具定义 + 这条交接文档 + 那段逐字保留的最近消息；旧消息仍在会话日志里，rewind 可回滚。")
           ),
           h("div", { style: { marginTop: 8, fontSize: 11.5, color: C.faint } }, "手动压缩：会话里发送 /compact 可随时折叠一次，不受这个比例限制。")
         ),

@@ -143,9 +143,9 @@ function scopeScriptPath() {
   }
 }
 
-function execSwitchOnce(command, env, script) {
+function execSwitchOnce(command, env, script, action) {
   return new Promise((resolve, reject) => {
-    execFile(command, [script, "enable"], { timeout: 6000, windowsHide: true, env }, (error, stdout, stderr) => {
+    execFile(command, [script, action], { timeout: 6000, windowsHide: true, env }, (error, stdout, stderr) => {
       if (error) {
         error.stdout = stdout;
         error.stderr = stderr;
@@ -158,15 +158,14 @@ function execSwitchOnce(command, env, script) {
 }
 
 /**
- * Apply the current settings sidecar to the preset/profile YAML. `node` is the
- * normal path; the Electron binary with ELECTRON_RUN_AS_NODE is the fallback
- * when the host has no node on PATH.
+ * Run one preset-scope action. `node` is the normal path; the Electron binary
+ * with ELECTRON_RUN_AS_NODE is the fallback when the host has no node on PATH.
  */
-async function applyScopeSwitch() {
+async function runScope(action) {
   const script = scopeScriptPath();
   if (!existsSync(script)) {
     const message = "preset-scope.mjs not found: " + script;
-    trace("scope switch failed: " + message);
+    trace("scope " + action + " failed: " + message);
     return { ok: false, message };
   }
   const explicit = process.env.DSH_NODE;
@@ -179,10 +178,11 @@ async function applyScopeSwitch() {
   let lastError;
   for (const attempt of attempts) {
     try {
-      const result = await execSwitchOnce(attempt.command, attempt.env, script);
-      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
-      trace("scope switch ok" + (output ? " | " + output : ""));
-      return { ok: true, output };
+      const result = await execSwitchOnce(attempt.command, attempt.env, script, action);
+      const output = `${result.stdout ?? ""}`.trim();
+      const noise = `${result.stderr ?? ""}`.trim();
+      trace("scope " + action + " ok" + (output ? " | " + output : "") + (noise ? " | " + noise : ""));
+      return { ok: true, output, noise };
     } catch (error) {
       lastError = error;
       if (error?.code !== "ENOENT") break;
@@ -190,8 +190,32 @@ async function applyScopeSwitch() {
   }
   const output = `${lastError?.stdout ?? ""}${lastError?.stderr ?? ""}`.trim();
   const message = (lastError?.message ?? String(lastError)) + (output ? "\n" + output : "");
-  trace("scope switch failed: " + message);
+  trace("scope " + action + " failed: " + message);
   return { ok: false, message };
+}
+
+/** Who actually compacts right now, straight from the preset YAML on disk. */
+async function readScopeState() {
+  const result = await runScope("state");
+  if (!result.ok) return { ok: false, message: result.message };
+  const line = String(result.output ?? "").split(/\r?\n/).filter(Boolean).pop() ?? "";
+  try {
+    return { ok: true, value: JSON.parse(line) };
+  } catch (error) {
+    const message = "unreadable scope state: " + (error instanceof Error ? error.message : String(error));
+    trace("scope state failed: " + message + " | " + line.slice(0, 200));
+    return { ok: false, message };
+  }
+}
+
+/**
+ * Apply the current settings sidecar to the preset/profile YAML.
+ */
+async function applyScopeSwitch() {
+  const result = await runScope("enable");
+  return result.ok
+    ? { ok: true, output: result.output }
+    : { ok: false, message: result.message };
 }
 
 const CHANNEL = "/dsh-auto-compaction";
@@ -264,6 +288,27 @@ export function apply(ctx, config = {}) {
               return { ok: false, error: { code: "auto-compaction/switch-failed", message: applied.message }, value: next };
             }
             return { ok: true, value: { ...next, switchApplied: true, defaultTemplate: TEMPLATE_FILE } };
+          }
+          if (endpoint === "scope") {
+            const state = await readScopeState();
+            return state.ok
+              ? { ok: true, value: state.value }
+              : { ok: false, error: { code: "auto-compaction/scope-unknown", message: state.message } };
+          }
+          if (endpoint === "takeover" || endpoint === "release") {
+            const action = endpoint === "takeover" ? "enable" : "disable";
+            const switched = await runScope(action);
+            if (!switched.ok) {
+              return {
+                ok: false,
+                error: { code: "auto-compaction/scope-switch-failed", message: switched.message },
+              };
+            }
+            const state = await readScopeState();
+            if (!state.ok) {
+              return { ok: false, error: { code: "auto-compaction/scope-unknown", message: state.message } };
+            }
+            return { ok: true, value: { ...state.value, switchedOutput: switched.output, noise: switched.noise } };
           }
           if (endpoint === "open") {
             trace("open " + JSON.stringify(payload));

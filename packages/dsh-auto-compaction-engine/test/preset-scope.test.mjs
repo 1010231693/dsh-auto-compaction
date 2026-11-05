@@ -163,6 +163,70 @@ test("settings preset list switches only the selected presets", () => {
   }
 });
 
+function stateJson(dir, env) {
+  const out = run("state", dir, { env });
+  return JSON.parse(out.split(/\r?\n/).filter(Boolean).pop());
+}
+
+test("state reports who compacts, before and after a takeover", () => {
+  const dir = tempDir();
+  try {
+    const presets = path.join(dir, "presets");
+    fs.mkdirSync(path.join(presets, "local"), { recursive: true });
+    fs.mkdirSync(path.join(presets, "standard"), { recursive: true });
+    fs.writeFileSync(path.join(presets, "local", "cordis.patch.yml"), presetFixture("lightweight-local"));
+    fs.writeFileSync(path.join(presets, "standard", "cordis.patch.yml"), presetFixture("lightweight-standard"));
+    fs.writeFileSync(path.join(dir, "profile.yml"), PROFILE_FIXTURE);
+    const settingsFile = path.join(dir, "settings.json");
+    const env = { DSH_LOCAL_PKGS: presets, DSH_HANDOFF_SETTINGS_FILE: settingsFile };
+    fs.writeFileSync(settingsFile, JSON.stringify({ scope: "preset", presets: ["lightweight-local"] }));
+
+    const before = stateJson(dir, env);
+    if (before.taken !== 0 || before.total !== 2) throw new Error(`fresh fixtures should be all native, got ${before.taken}/${before.total}`);
+    if (before.rootGuard !== "on") throw new Error(`native profile should read as guard on, got ${before.rootGuard}`);
+    if (before.enabled !== true) throw new Error("missing settings should default to enabled");
+
+    run("enable", dir, { env });
+    const after = stateJson(dir, env);
+    if (after.taken !== 1) throw new Error(`only the selected preset should be taken, got ${after.taken}`);
+    const byId = Object.fromEntries(after.presets.map((p) => [p.id, p]));
+    if (byId["lightweight-local"].owner !== "plugin" || byId["lightweight-local"].selected !== true) {
+      throw new Error("selected preset is not reported as plugin-owned");
+    }
+    if (byId["lightweight-standard"].owner !== "native" || byId["lightweight-standard"].selected !== false) {
+      throw new Error("unselected preset is not reported as native");
+    }
+    if (after.rootGuard !== "off") throw new Error(`plugin takeover should guard the root native engine, got ${after.rootGuard}`);
+
+    run("disable", dir, { env });
+    const back = stateJson(dir, env);
+    if (back.taken !== 0 || back.rootGuard !== "on") throw new Error(`disable should return to all-native, got ${back.taken}/${back.rootGuard}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("state mirrors the enabled switch without changing ownership", () => {
+  const dir = tempDir();
+  try {
+    const presets = path.join(dir, "presets");
+    fs.mkdirSync(path.join(presets, "local"), { recursive: true });
+    fs.writeFileSync(path.join(presets, "local", "cordis.patch.yml"), presetFixture("lightweight-local"));
+    fs.writeFileSync(path.join(dir, "profile.yml"), PROFILE_FIXTURE);
+    const settingsFile = path.join(dir, "settings.json");
+    const env = { DSH_LOCAL_PKGS: presets, DSH_HANDOFF_SETTINGS_FILE: settingsFile };
+    fs.writeFileSync(settingsFile, JSON.stringify({ scope: "global", enabled: false }));
+
+    run("enable", dir, { env });
+    const st = stateJson(dir, env);
+    if (st.enabled !== false) throw new Error("the switch-off should be visible to the settings page");
+    if (st.taken !== 1) throw new Error("ownership is about the YAML, so it must stay taken");
+    if (st.presets[0].owner !== "plugin") throw new Error("slot owner should still read as plugin while the switch is off");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 let failed = 0;
 for (const { name, fn } of cases) {
   try { fn(); console.log(`ok   ${name}`); }

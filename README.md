@@ -90,16 +90,25 @@ node scripts/preset-scope.mjs disable  # 全部恢复原生
 
 设置页支持「全局生效 / 按预设生效」：保存时 UI 会自动执行 `preset-scope.mjs enable`。按预设时，勾选的预设切到插件并关闭其原生压缩，其余可编辑预设恢复自身原生行；根级 `compaction-basic` 的 `auto:false` 守卫只在至少一个预设使用插件时写入。
 
+### 当前生效情况
+
+设置页第二行「当前生效情况」不读自己的配置，而是读各 Agent 预设 YAML 里的 compaction 槽位（`preset-scope.mjs state` 返回一行 JSON），所以它显示的就是 DSH 下次启动会加载的事实：
+
+- 圆点状态：`原生压缩` / `已由插件接管` / `n/m 预设已接管` / `预设已指向插件，但插件已停用` / `读不到生效情况`；
+- 右侧只有一个动作按钮：`接管压缩` / `接管其余预设` / `交回原生`，写完立刻回读并提示「重启 DSH 后生效」；
+- 接管与交回都只改预设文件，写前自动留 `cordis.patch.yml.bak-scope`，要还原把它复制回去即可。
+
 `enabled`（默认 `true`）是设置页顶部的开关：引擎每次判定都读取，写盘后下一次判定即生效。关闭时引擎不再挂交接文档，把 `compactIfNeeded` / `summarize` / `compactNow` 全部交回 `@deepseek-ai/dsh-compaction-basic`，即 DSH 原生压缩；设置页同时也隐藏状态提示。
 
 ## 与 DSH 原生压缩的关系
 
-两种回到原生的方式：
+两种回到原生的方式，区别在「改的是运行时还是配置文件」：
 
 - **软开关（推荐，无需重启）**：设置页关闭「启用插件」。预设行仍指向插件，但引擎把自己的自动触发、交接模板和状态边车都交回原生实现；手动 `/compact` 也走原生摘要。
-- **硬切换（整行换回，需重启 DSH）**：
+- **硬切换（整行换回，需重启 DSH）**：设置页点「交回原生」，或手动执行：
 
 ```bash
+node scripts/preset-scope.mjs state     # 一行 JSON：谁在压缩、根守卫状态
 node scripts/preset-scope.mjs disable   # 恢复 @deepseek-ai/dsh-compaction-basic + auto: true
 ```
 
