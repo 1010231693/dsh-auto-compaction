@@ -56,6 +56,7 @@ write(TWO_SECTION_TEMPLATE, "## 用户目标与原始要求\n\n## 当前任务�
 process.env.DSH_HANDOFF_SETTINGS_FILE = path.join(SANDBOX, "settings-missing.json");
 process.env.DSH_HANDOFF_TEMPLATE = TEMPLATE;
 process.env.DSH_HANDOFF_STATUS_DIR = path.join(SANDBOX, "status");
+process.env.DSH_HANDOFF_TRACE_FILE = path.join(SANDBOX, "trace.log");
 const { default: HandoffCompaction } = await import(pathToFileURL(path.join(SANDBOX, "lib", "index.js")).href);
 
 function makeCtx({ totalTokens, contextWindow = 250_000, defaultMaxTokens = 20_000 }) {
@@ -339,6 +340,75 @@ test("plugin on: the stock automatic trigger stays inert", async () => {
   if (result !== null) throw new Error("native trigger ran while the plugin was on");
   if (plugin.native.length !== 0) throw new Error("native engine consulted while the plugin was on");
 });
+
+/* Per-preset scope: the takeover row is mounted in every preset, so a preset
+ * the user left unchecked must behave exactly like the stock engine. */
+test("scope preset: an unchecked preset delegates pressure compaction to native", async () => {
+  fs.writeFileSync(SETTINGS, JSON.stringify({ scope: "preset", presets: ["lightweight-local"] }));
+  await delay(5);
+  const ctx = makeCtx({ totalTokens: 40_000 });
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000, presetId: "standard" });
+  const agent = makeAgent();
+  const result = await plugin.compactIfNeeded(agent, "pressure", undefined);
+  if (!plugin.native.includes("pressure")) throw new Error("unchecked preset did not delegate to native");
+  if (!result || result.shadowedTokenCount !== 1_000) throw new Error("native result not returned");
+});
+
+test("scope preset: a checked preset keeps the stock automatic trigger inert", async () => {
+  fs.writeFileSync(SETTINGS, JSON.stringify({ scope: "preset", presets: ["standard"] }));
+  await delay(5);
+  const ctx = makeCtx({ totalTokens: 40_000 });
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000, presetId: "standard" });
+  const agent = makeAgent();
+  const result = await plugin.compactIfNeeded(agent, "pressure", undefined);
+  if (result !== null) throw new Error("checked preset delegated instead of taking over");
+  if (plugin.native.length !== 0) throw new Error("native engine consulted for a checked preset");
+});
+
+test("scope preset: an unchecked preset never starts a handoff from the idle gate", async () => {
+  const statusFile = path.join(SANDBOX, "status", "session-test.json");
+  fs.rmSync(statusFile, { force: true });
+  fs.writeFileSync(SETTINGS, JSON.stringify({ scope: "preset", presets: ["lightweight-local"] }));
+  await delay(5);
+  const ctx = makeCtx({ totalTokens: 40_000 });
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000, reservedCompletionTokensOverride: 4_000, idleDelayMs: 5, dryRun: false, presetId: "standard" });
+  const agent = makeAgent();
+  ctx.handlers["agent/status"][0]({ agent, status: "idle" });
+  await delay(40);
+  if (plugin.calls.length !== 0) throw new Error("idle gate ran for an unchecked preset");
+  if (fs.existsSync(statusFile)) throw new Error("a status sidecar was written for an unchecked preset");
+});
+
+test("scope preset: an unchecked preset summarizes with the stock prompt", async () => {
+  const ctx = makeCtx({ totalTokens: 0 });
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000, dryRun: true, maxTokens: 12_288, presetId: "minimal" });
+  const agent = makeAgent();
+  const result = await plugin.summarize({ messages: [{ role: "user", content: "OLD" }] }, agent);
+  if (!plugin.native.includes("summarize")) throw new Error("stock summarize not called for an unchecked preset");
+  if (result.summary[0].text !== "NATIVE SUMMARY") throw new Error("handoff prompt used for an unchecked preset");
+});
+
+test("scope preset: a row without presetId keeps the takeover instead of going native", async () => {
+  fs.writeFileSync(SETTINGS, JSON.stringify({ scope: "preset", presets: [] }));
+  await delay(5);
+  const ctx = makeCtx({ totalTokens: 40_000 });
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000 });
+  const agent = makeAgent();
+  const result = await plugin.compactIfNeeded(agent, "pressure", undefined);
+  if (result !== null) throw new Error("a presetId-less row fell back to native");
+});
+
+test("scope global: presetId plays no part and the takeover stays on", async () => {
+  fs.writeFileSync(SETTINGS, JSON.stringify({ scope: "global", presets: [] }));
+  await delay(5);
+  const ctx = makeCtx({ totalTokens: 40_000 });
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000, presetId: "standard" });
+  const agent = makeAgent();
+  const result = await plugin.compactIfNeeded(agent, "pressure", undefined);
+  if (result !== null) throw new Error("global scope delegated despite the takeover being on");
+});
+
+fs.rmSync(SETTINGS, { force: true });
 
 let failed = 0;
 for (const { name, fn } of cases) {

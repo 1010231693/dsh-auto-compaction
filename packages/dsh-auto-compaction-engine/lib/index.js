@@ -43,6 +43,12 @@ const SETTINGS_DIR = join(homedir(), ".dsh-handoff-compaction");
 // into a case that expects the configured ratio.
 const SETTINGS_FILE = process.env.DSH_HANDOFF_SETTINGS_FILE ?? join(SETTINGS_DIR, "settings.json");
 const DEFAULT_TEMPLATE_FILE = join(SETTINGS_DIR, "template.md");
+/**
+ * Trace goes to the standard sidecar unless a row says otherwise. Generated
+ * takeover rows carry no path of their own, so defaulting here is what keeps
+ * the diagnostic channel alive; an explicit `traceFile: ""` still turns it off.
+ */
+const DEFAULT_TRACE_FILE = process.env.DSH_HANDOFF_TRACE_FILE ?? join(SETTINGS_DIR, "trace.log");
 
 /**
  * Live settings written by the companion UI package (dsh-handoff-compaction-ui).
@@ -216,7 +222,7 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       presetId: typeof presetId === "string" ? presetId : "",
       autoCreateTemplate: autoCreateTemplate !== false,
     };
-    this.handoff.traceFile = typeof traceFile === "string" ? traceFile : "";
+    this.handoff.traceFile = typeof traceFile === "string" ? traceFile : DEFAULT_TRACE_FILE;
     this.handoff.traceConsole = traceConsole === true;
     // Materialise the template so the settings card can point at a real file.
     try { readTemplate(this.handoff.templateFile, this.handoff.autoCreateTemplate); } catch { /* never block construction */ }
@@ -245,10 +251,26 @@ export default class HandoffCompaction extends BasicCompactionEngine {
   /**
    * Settings switch. Missing settings or a missing field keeps the plugin on;
    * only an explicit `enabled: false` hands compaction back to the stock engine.
+   *
+   * Scope is decided here rather than at the idle gate because the takeover row
+   * is mounted in every preset: a preset the user did not select must behave
+   * exactly like the stock engine on every entry point, not just skip its own
+   * idle check. `presetId` empty means the row carried no identity, which keeps
+   * the plugin on rather than silently disabling it.
    */
   handoffEnabled() {
     const live = readSettings();
-    return !(live !== undefined && live.enabled === false);
+    if (live !== undefined && live.enabled === false) return false;
+    return !this.excludedByScope(live);
+  }
+
+  /** True when `scope: "preset"` leaves this preset out of the takeover. */
+  excludedByScope(live = readSettings()) {
+    if (live?.scope !== "preset") return false;
+    const id = this.handoff?.presetId;
+    if (typeof id !== "string" || id === "") return false;
+    const selected = Array.isArray(live.presets) ? live.presets : [];
+    return !selected.includes(id);
   }
 
   /**
@@ -297,6 +319,9 @@ export default class HandoffCompaction extends BasicCompactionEngine {
 
   async checkAndHandoff(agent, why = "idle") {
     if (this.running.has(agent)) return;
+    if (this.excludedByScope()) {
+      return this.log(`${why}: skipped by scope (preset "${this.handoff.presetId}" not selected)`);
+    }
     if (!this.handoffEnabled()) return;
     try {
       const session = agent.session;
@@ -315,11 +340,6 @@ export default class HandoffCompaction extends BasicCompactionEngine {
         : info.context?.contextWindow;
 
       const live = readSettings();
-      const scope = live?.scope === "preset" ? "preset" : "global";
-      const selectedPresets = Array.isArray(live?.presets) ? live.presets : [];
-      if (scope === "preset" && this.handoff.presetId !== "" && !selectedPresets.includes(this.handoff.presetId)) {
-        return this.log(`${why}: skipped by scope (preset "${this.handoff.presetId}" not selected)`);
-      }
       const liveRatio = typeof live?.thresholdRatio === "number" && live.thresholdRatio > 0 && live.thresholdRatio <= 1
         ? live.thresholdRatio
         : undefined;

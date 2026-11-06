@@ -32,10 +32,21 @@ window.__ModuleLoader__.load({
     };
 
     var DEFAULT_TEMPLATE = "~/.dsh-handoff-compaction/template.md";
-    var PRESETS = [
-      { id: "lightweight-local", label: "轻量本地" },
-      { id: "lightweight-standard", label: "轻量标准" },
-    ];
+    /* Preset names come from DSH's own registry through the `scope` RPC, never
+     * from a list baked in here: a release that renames or adds a preset must
+     * not leave this page showing names that no longer exist. */
+    var presetLabels = {};
+    function rememberPresetLabels(list) {
+      for (var i = 0; i < list.length; i += 1) {
+        var entry = list[i];
+        if (entry && typeof entry.id === "string") {
+          presetLabels[entry.id] = typeof entry.label === "string" && entry.label.length > 0 ? entry.label : entry.id;
+        }
+      }
+    }
+    function presetLabel(id) {
+      return presetLabels[String(id)] || String(id || "未命名预设");
+    }
     var DISPLAY_OPTIONS = [
       { id: "orbit", label: "轨道环" },
       { id: "strip", label: "状态条" },
@@ -43,10 +54,6 @@ window.__ModuleLoader__.load({
       { id: "topbar", label: "顶部条" },
       { id: "corner", label: "右上角" },
     ];
-    function presetLabel(id) {
-      for (var i = 0; i < PRESETS.length; i += 1) if (PRESETS[i].id === id) return PRESETS[i].label;
-      return String(id || "未命名预设");
-    }
     var EXAMPLE_WINDOW = 250000, EXAMPLE_RESERVED = 20000, EXAMPLE_HEADROOM = 10000;
 
     var DISPLAY_STYLES = ["orbit", "strip", "ring", "topbar", "corner"];
@@ -697,8 +704,8 @@ window.__ModuleLoader__.load({
       var token = tokenState[0], setToken = tokenState[1];
       ensureStatusStyles();
 
-      // The compaction slot lives in the preset YAML, not in our settings file,
-      // so the truth is read from disk each time the section opens.
+      // Which presets exist and which of them this plugin's patch reaches is
+      // DSH's answer, not ours, so it is read fresh each time the section opens.
       React.useEffect(function () {
         if (!connection) {
           setScope({ loading: false, error: "连接服务不可用", value: null });
@@ -707,7 +714,9 @@ window.__ModuleLoader__.load({
         var alive = true;
         setScope(function (previous) { return { loading: true, error: "", value: previous.value }; });
         call(connection, "scope").then(function (value) {
-          if (alive) setScope({ loading: false, error: "", value: value });
+          if (!alive) return;
+          rememberPresetLabels(value && Array.isArray(value.presets) ? value.presets : []);
+          setScope({ loading: false, error: "", value: value });
         }).catch(function (error) {
           if (alive) setScope({ loading: false, error: String(error && error.message || error), value: null });
         });
@@ -755,51 +764,61 @@ window.__ModuleLoader__.load({
             tone: "err",
             text: scope.loading ? "读取中…" : "读不到生效情况",
             sub: scope.loading
-              ? "正在读取各 Agent 预设里的 compaction 槽位。"
-              : "读不到预设里的 compaction 槽位：" + (scope.error || "未知原因") + "。",
+              ? "正在向 DSH 读取预设名单与本插件的接管行。"
+              : "读不到预设名单：" + (scope.error || "未知原因") + "。",
             rows: [], retry: true,
           };
         }
         var list = Array.isArray(st.presets) ? st.presets : [];
+        rememberPresetLabels(list);
         var rows = list.map(function (p) {
           return {
-            key: String(p.id), label: presetLabel(p.id), taken: p.owner === "plugin",
-            owner: p.owner === "plugin" ? "插件" : p.owner === "native" ? "原生" : "未知",
+            key: String(p.id),
+            label: presetLabel(p.id),
+            taken: p.effective === true,
+            owner: p.effective === true ? "插件" : p.covered === true ? "原生（未勾选）" : "原生（未覆盖）",
           };
         });
         var names = rows.map(function (r) { return r.label; });
         var takenNames = rows.filter(function (r) { return r.taken; }).map(function (r) { return r.label; });
         var restNames = rows.filter(function (r) { return !r.taken; }).map(function (r) { return r.label; });
-        var taken = Number(st.taken) || 0;
         var total = Number(st.total) || list.length;
+        var covered = Number(st.covered) || 0;
+        var effective = Number(st.effective) || 0;
         var globalSaved = st.scope !== "preset";
-        var scopeLead = globalSaved
-          ? "全局生效："
-          : "按预设生效：";
+        var scopeLead = globalSaved ? "全局生效：" : "按预设生效：";
+        var mechanism = "接管行写在本插件包内的补丁里，卸载插件时随包一起消失，你的预设文件不会被改动。";
+
         if (total === 0) {
           return {
             tone: "err", text: "读不到预设", rows: [], retry: true,
-            sub: "没找到带 handoff 槽位的可编辑预设文件，所以无法判断压缩由谁负责。确认 DSH 已生成预设后重新读取。",
+            sub: "DSH 没有返回任何 Agent 预设" + (st.reason ? "（" + st.reason + "）" : "") + "，所以无法判断压缩由谁负责。重新读取试试。",
           };
         }
-        if (taken === 0) {
+        if (covered === 0) {
           return {
-            tone: "native", text: "DSH 原生压缩", rows: rows, retry: false,
-            sub: "各预设的 compaction 槽位都还在原生实现手里，所以压缩目前由 DSH 自己完成。保存本页设置会自动接管 " + names.join("、") + "（写入预设文件并留备份，重启 DSH 后生效）。",
+            tone: "native", text: "DSH 原生压缩", rows: rows, retry: true,
+            sub: "本插件的接管行还没覆盖到任何预设" + (st.reason ? "（" + st.reason + "）" : "")
+              + "，压缩目前由 DSH 自己完成。" + mechanism + " 新生成或新装的预设需要重启 DSH 重新生成接管行。",
           };
         }
-        if (!enabled) {
+        if (effective === 0 && !enabled) {
           return {
             tone: "native", text: "DSH 原生压缩（插件已停用）", rows: rows, retry: false,
-            sub: taken < total
-              ? "「启用插件」已关闭，压缩由 DSH 原生实现负责；" + takenNames.join("、") + " 的槽位仍指向插件，" + restNames.join("、") + " 本来就走原生。"
-              : "「启用插件」已关闭：槽位虽然指向插件，但插件把压缩交回 DSH 原生实现。打开开关即恢复，不需要重启。",
+            sub: "「启用插件」已关闭：" + takenNames.length + "/" + total + " 个预设虽然被接管行覆盖，但插件把压缩交回 DSH 原生实现。打开开关即恢复，不需要重启。",
           };
         }
-        if (taken < total) {
+        if (effective === 0) {
           return {
-            tone: "part", text: taken + "/" + total + " 预设已接管", rows: rows, retry: false,
-            sub: scopeLead + "已交给插件：" + takenNames.join("、") + "；" + restNames.join("、") + " 仍走各自的原生压缩。",
+            tone: "native", text: "DSH 原生压缩", rows: rows, retry: false,
+            sub: scopeLead + "当前没有任何预设处于接管状态（" + names.join("、") + " 都走原生）。"
+              + "勾选预设或切到「全局生效」并保存即可，下一次判定就生效，不需要重启。",
+          };
+        }
+        if (effective < total) {
+          return {
+            tone: "part", text: effective + "/" + total + " 预设已由插件压缩", rows: rows, retry: false,
+            sub: scopeLead + "由插件负责：" + takenNames.join("、") + "；" + restNames.join("、") + " 仍走各自的原生压缩。" + mechanism,
           };
         }
         return {
@@ -807,12 +826,17 @@ window.__ModuleLoader__.load({
           text: globalSaved ? "已由插件接管（全局）" : "已由插件接管",
           rows: rows, retry: false,
           sub: scopeLead + (globalSaved
-            ? "这 " + total + " 个带 handoff 槽位的可编辑预设（" + names.join("、") + "）"
-            : "勾选的 " + taken + " 个预设（" + takenNames.join("、") + "）")
-            + "的 compaction 槽位指向插件，且「启用插件」是开的，压缩由本插件的交接文档负责。",
+            ? "这 " + total + " 个预设（" + names.join("、") + "）"
+            : "勾选的 " + effective + " 个预设（" + takenNames.join("、") + "）")
+            + " 的压缩由本插件的交接文档负责，且「启用插件」是开的。" + mechanism,
         };
       })();
       var scopeTone = SCOPE_TONE[scopeView.tone] || SCOPE_TONE.native;
+      /* Only presets the takeover rows reach can be selected; the rest stay
+       * native and would be misleading to offer. */
+      var takeable = scope.value && Array.isArray(scope.value.presets)
+        ? scope.value.presets.filter(function (p) { return p && p.covered === true; })
+        : [];
 
       var budget = EXAMPLE_WINDOW - EXAMPLE_RESERVED;
       var ceiling = budget - EXAMPLE_HEADROOM;
@@ -836,7 +860,7 @@ window.__ModuleLoader__.load({
       if (scopeIsPending) pendingParts.push("生效范围改成「" + (scopePreset ? "按预设生效" : "全局生效") + "」");
       if (presetsIsPending) pendingParts.push("勾选的预设改成" + (presets.length ? presets.map(presetLabel).join("、") : "（都不勾）"));
       var pendingNote = pendingParts.length
-        ? "还没保存：" + pendingParts.join("；") + "。保存后开关立刻生效，槽位改动要重启 DSH 才加载。"
+        ? "还没保存：" + pendingParts.join("；") + "。保存后开关与勾选在下一次判定就生效，不需要重启；只有接管行本身要覆盖新的预设时才需要重启 DSH 重新生成。"
         : "";
 
       function patch(next) { setDraft(Object.assign({}, base, next)); setStatus({ loading: false, error: "", saving: false, saved: false }); }
@@ -906,7 +930,7 @@ window.__ModuleLoader__.load({
         h("div", { style: rowStyle },
           h("div", null,
             h("div", { style: labelStyle }, "生效范围"),
-            h("div", { style: subStyle }, scopePreset ? "仅勾选的预设切到插件并关闭其原生压缩；其余预设保持原生" : "所有带 handoff slot 的可编辑预设都切到插件，共用这份设置")
+            h("div", { style: subStyle }, scopePreset ? "只有勾选的预设由插件压缩，其余预设保持 DSH 原生行为；名单来自 DSH 的预设注册表" : "所有能被本插件接管的预设都由插件压缩，共用这份设置")
           ),
           h("div", { style: { display: "inline-flex", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
             seg(!scopePreset, "全局生效", function () { patch({ scope: "global" }); }),
@@ -914,13 +938,17 @@ window.__ModuleLoader__.load({
           )
         ),
         scopePreset ? h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 0", borderBottom: "1px solid " + C.line } },
-          PRESETS.map(function (p) {
-            var on = presets.indexOf(p.id) >= 0;
-            return h("button", {
-              key: p.id, type: "button", onClick: function () { setPreset(p.id); },
-              style: { fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer", font: "inherit", border: "1px solid " + (on ? C.accent : C.line), background: on ? "rgba(76,141,255,.12)" : "#191a1d", color: on ? C.text : C.muted },
-            }, p.label);
-          })
+          takeable.length === 0
+            ? h("span", { style: subStyle }, scope.loading
+              ? "正在向 DSH 读取预设名单…"
+              : "本插件的接管行还没覆盖到任何预设。重启 DSH 会重新生成接管行；仍未出现预设名单说明 DSH 没有返回预设。")
+            : takeable.map(function (p) {
+                var on = presets.indexOf(p.id) >= 0;
+                return h("button", {
+                  key: p.id, type: "button", onClick: function () { setPreset(p.id); },
+                  style: { fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer", font: "inherit", border: "1px solid " + (on ? C.accent : C.line), background: on ? "rgba(76,141,255,.12)" : "#191a1d", color: on ? C.text : C.muted },
+                }, presetLabel(p.id));
+              })
         ) : null,
 
         h("div", { style: rowStyle },

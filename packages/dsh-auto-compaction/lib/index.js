@@ -17,6 +17,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFile, spawn } from "node:child_process";
+import { mountTakeover, presetInventory } from "./takeover-mount.js";
 
 export const name = "dsh-auto-compaction";
 export const inject = [];
@@ -25,7 +26,7 @@ export const Config = z.object({
   enabled: z.boolean().default(true),
   thresholdRatio: z.number().default(90),
   scopePreset: z.boolean().default(false),
-  presets: z.string().default("lightweight-local"),
+  presets: z.string().default(""),
   templateFile: z.string().default(""),
   openTemplate: z.string().default(""),
   displayStyle: z.string().default("orbit"),
@@ -194,28 +195,38 @@ async function runScope(action) {
   return { ok: false, message };
 }
 
-/** Who actually compacts right now, straight from the preset YAML on disk. */
-async function readScopeState() {
-  const result = await runScope("state");
-  if (!result.ok) return { ok: false, message: result.message };
-  const line = String(result.output ?? "").split(/\r?\n/).filter(Boolean).pop() ?? "";
-  try {
-    return { ok: true, value: JSON.parse(line) };
-  } catch (error) {
-    const message = "unreadable scope state: " + (error instanceof Error ? error.message : String(error));
-    trace("scope state failed: " + message + " | " + line.slice(0, 200));
-    return { ok: false, message };
-  }
-}
-
 /**
- * Apply the current settings sidecar to the preset/profile YAML.
+ * Hand compaction back where the old mechanism left it.
+ *
+ * Up to 0.2.x the takeover was written into the user's own preset files plus a
+ * root-level guard in the profile patch. Those rows now live inside this
+ * package, so a leftover switch would mount two providers in the same realm and
+ * DSH would refuse to start. Detection goes through the script's own read-only
+ * report rather than a second YAML parser; the revert runs once and is recorded
+ * so later boots skip the subprocess entirely.
  */
-async function applyScopeSwitch() {
-  const result = await runScope("enable");
-  return result.ok
-    ? { ok: true, output: result.output }
-    : { ok: false, message: result.message };
+async function revertLegacyTakeover(ctx) {
+  const settings = readSettings();
+  if (settings?.legacyRevertedAt !== undefined) return { reverted: false, skipped: "already" };
+  const state = await runScope("state");
+  if (!state.ok) return { reverted: false, reason: state.message };
+  const line = String(state.output ?? "").split(/\r?\n/).filter(Boolean).pop() ?? "";
+  let value;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return { reverted: false, reason: "unreadable legacy state" };
+  }
+  const legacy = Number(value?.taken) > 0 || value?.rootGuard === "off";
+  if (!legacy) return { reverted: false, legacy: false };
+
+  const disabled = await runScope("disable");
+  if (!disabled.ok) return { reverted: false, reason: disabled.message };
+
+  writeSettings(ctx, { ...settings, legacyRevertedAt: new Date().toISOString() });
+  trace(`legacy takeover reverted: taken=${value?.taken}/${value?.total} rootGuard=${value?.rootGuard}`);
+  ctx.logger?.info?.("[handoff-ui] 旧版接管残留已恢复为原生压缩（预设文件与根级守卫）");
+  return { reverted: true, taken: value?.taken, total: value?.total };
 }
 
 const CHANNEL = "/dsh-auto-compaction";
@@ -248,6 +259,22 @@ function sanitize(payload) {
 export function apply(ctx, config = {}) {
   const seeded = normalize(config);
   if (readSettings() === undefined) writeSettings(ctx, seeded);
+  // Takeover rows are regenerated from the live preset definitions on every
+  // load, into this package's own patch file. Nothing here depends on the
+  // user's scope selection: an unselected preset is handled by the engine
+  // delegating to the stock one, so installing is enough to take over and
+  // uninstalling is enough to hand compaction back.
+  void (async () => {
+    const legacy = await revertLegacyTakeover(ctx);
+    if (legacy.reverted) trace("legacy takeover reverted before mounting");
+    else if (legacy.reason) trace("legacy takeover check skipped: " + legacy.reason);
+    return mountTakeover(ctx);
+  })().then((result) => {
+    trace(`takeover mount ${result.ok ? "ok" : "failed"} taken=${result.taken?.join(",") ?? "-"} mounted=${result.mounted?.join(",") ?? "-"} skipped=${result.skipped?.join(",") ?? "-"} ${result.reason ?? ""}`);
+  }).catch((error) => {
+    trace("takeover mount threw: " + (error instanceof Error ? error.message : String(error)));
+    ctx.logger?.warn?.(`[handoff-ui] takeover mount failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
   void handleOpen(ctx, config.openTemplate, seeded.templateFile || TEMPLATE_FILE).catch((error) => {
     ctx.logger?.warn?.(`[handoff-ui] openTemplate failed: ${error instanceof Error ? error.message : String(error)}`);
   });
@@ -283,17 +310,29 @@ export function apply(ctx, config = {}) {
             const next = sanitize(payload);
             trace("set " + JSON.stringify(next));
             writeSettings(ctx, next);
-            const applied = await applyScopeSwitch();
-            if (!applied.ok) {
-              return { ok: false, error: { code: "auto-compaction/switch-failed", message: applied.message }, value: next };
-            }
-            return { ok: true, value: { ...next, switchApplied: true, defaultTemplate: TEMPLATE_FILE } };
+            // No rewriting of preset files: the engine applies the switch and
+            // the scope per preset at decision time, so a save is live at the
+            // next idle check and uninstalling still leaves nothing behind.
+            return { ok: true, value: { ...next, defaultTemplate: TEMPLATE_FILE } };
           }
           if (endpoint === "scope") {
-            const state = await readScopeState();
-            return state.ok
-              ? { ok: true, value: state.value }
-              : { ok: false, error: { code: "auto-compaction/scope-unknown", message: state.message } };
+            const stored = readSettings() ?? seeded;
+            try {
+              const inventory = await presetInventory(ctx, stored);
+              return {
+                ok: true,
+                value: {
+                  enabled: stored.enabled !== false,
+                  scope: stored.scope === "preset" ? "preset" : "global",
+                  source: "bundle-patch",
+                  ...inventory,
+                },
+              };
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              trace("scope inventory failed: " + message);
+              return { ok: false, error: { code: "auto-compaction/scope-unknown", message } };
+            }
           }
           if (endpoint === "open") {
             trace("open " + JSON.stringify(payload));
