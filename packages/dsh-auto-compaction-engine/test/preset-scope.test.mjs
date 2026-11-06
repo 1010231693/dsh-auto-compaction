@@ -137,7 +137,11 @@ test("settings preset list switches only the selected presets", () => {
     if (!local.includes('name: "dsh-auto-compaction-engine"')) throw new Error("selected preset did not switch to the plugin");
     if (!local.includes("presetId: lightweight-local")) throw new Error("selected preset id not applied");
     if (!standard.includes('name: "@deepseek-ai/dsh-compaction-basic"')) throw new Error("unselected preset did not stay native");
-    if (!standard.includes("auto: true")) throw new Error("unselected preset lost native auto");
+    // Restoring must not invent thresholds: an untouched preset declares the
+    // row bare, and `auto: true / 0.9 / 20000` moves native's trigger to
+    // 20,000 tokens on a 60K window.
+    if (/auto:/.test(standard)) throw new Error("restored native row invented auto");
+    if (/thresholdRatio/.test(standard)) throw new Error("restored native row invented thresholdRatio");
     if (!/auto:\s*false/.test(fs.readFileSync(path.join(dir, "profile.yml"), "utf8"))) throw new Error("root guard missing");
 
     fs.writeFileSync(settingsFile, JSON.stringify({ scope: "preset", presets: ["lightweight-standard"] }));
@@ -222,6 +226,59 @@ test("state mirrors the enabled switch without changing ownership", () => {
     if (st.enabled !== false) throw new Error("the switch-off should be visible to the settings page");
     if (st.taken !== 1) throw new Error("ownership is about the YAML, so it must stay taken");
     if (st.presets[0].owner !== "plugin") throw new Error("slot owner should still read as plugin while the switch is off");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/* A restored native row must carry nothing we invented. An earlier template
+ * wrote `auto: true` plus `thresholdRatio: 0.9 / headroomTokens: 20000`, and on
+ * a 60K window that moves native's trigger to 20,000 tokens: the engine then
+ * attempted a compaction on every step of every turn. Untouched presets declare
+ * the row with no config at all, so that is what restoring has to produce. */
+test("disable restores the native row without inventing config values", () => {
+  const dir = tempDir();
+  try {
+    fs.writeFileSync(path.join(dir, "preset.yml"), presetFixture("preset-fixture"));
+    fs.writeFileSync(path.join(dir, "profile.yml"), PROFILE_FIXTURE);
+    run("enable", dir, { preset: path.join(dir, "preset.yml") });
+    run("disable", dir, { preset: path.join(dir, "preset.yml") });
+    const preset = fs.readFileSync(path.join(dir, "preset.yml"), "utf8");
+    const slot = preset.split("# >>> handoff:slot:begin")[1].split("# <<< handoff:slot:end")[0];
+    for (const key of ["thresholdRatio", "headroomTokens", "auto", "maxTokens", "config"]) {
+      if (slot.includes(key)) throw new Error(`restored slot invented ${key}`);
+    }
+    if (!slot.includes("dsh-compaction-basic")) throw new Error("restored slot lost the native name");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/* DSH's own preset files quote names with single quotes; ownership reading only
+ * double quotes reported a genuinely native row as "unknown". */
+test("a single-quoted native row is still recognised as native", () => {
+  const dir = tempDir();
+  try {
+    const file = path.join(dir, "preset.yml");
+    fs.writeFileSync(file, `- insert:
+    - id: preset-local
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: local
+        plugins:
+          - id: compaction
+            name: cordis:group
+            group: true
+            config:
+              # >>> handoff:slot:begin
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              # <<< handoff:slot:end
+`);
+    fs.writeFileSync(path.join(dir, "profile.yml"), PROFILE_FIXTURE);
+    const out = run("status", dir, { preset: file });
+    if (!out.includes("DSH 原生压缩")) throw new Error(`single-quoted native row misread:\n${out}`);
+    if (out.includes("未知")) throw new Error("single-quoted native row reported as unknown");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

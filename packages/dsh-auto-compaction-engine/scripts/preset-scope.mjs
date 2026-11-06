@@ -195,8 +195,11 @@ function activeName(lines) {
   const bounds = slotBounds(lines);
   if (bounds === undefined) return "no slot";
   for (let i = bounds.begin + 1; i < bounds.end; i += 1) {
-    const match = lines[i].match(/^\s*name:\s*"([^"]+)"/);
-    if (match) return match[1];
+    // Any YAML quote style, or none: DSH's own preset files write
+    // `name: '@deepseek-ai/dsh-compaction-basic'`, and reading only double
+    // quotes reported a genuinely native row as "unknown".
+    const match = lines[i].match(/^\s*name:\s*(?:"([^"]+)"|'([^']+)'|([^\s#]+))\s*$/);
+    if (match) return match[1] ?? match[2] ?? match[3];
   }
   return "unknown";
 }
@@ -437,6 +440,10 @@ for (const entry of plan) {
     console.error(`skip (cannot read preset id): ${file}`);
     continue;
   }
+  // row-native.yml is deliberately a bare row: a preset that was never taken
+  // over declares compaction-basic with no config at all, and inventing
+  // thresholds here silently moves native's trigger (0.9/20000 on a 60K window
+  // puts it at 20,000 tokens, so native attempted a compaction every step).
   const row = entry.enable
     ? pluginRow(id)
     : indentRow(fs.readFileSync(path.join(HERE, "row-native.yml"), "utf8"));
