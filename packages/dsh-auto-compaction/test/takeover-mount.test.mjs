@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureBundleLayer, mountTakeover, presetInventory, readTakenPresets } from "../lib/takeover-mount.js";
+import { ensureBundleLayer, mountTakeover, presetInventory, profileManifest, readTakenPresets } from "../lib/takeover-mount.js";
 
 /* The host's registry publishes a preset's plugin list as a YAML string, so the
  * stub has to hand back the same shape or the test proves nothing. */
@@ -229,6 +229,23 @@ test("a manifest without the array is left alone with a reason", () => {
   const result = ensureBundleLayer('{"name":"web"}\n');
   assert.equal(result.changed, false);
   assert.match(result.reason, /no dsh\.profile\.bundles/);
+});
+
+/* Every test above pins DSH_PROFILE_MANIFEST, so the fallback path shipped
+ * untested and 0.2.4 crashed its first activation with `path is not defined`.
+ * This case must stay free of env overrides. */
+test("the manifest path resolves without env overrides", () => {
+  const savedManifest = process.env.DSH_PROFILE_MANIFEST;
+  const savedAppData = process.env.APP_DATA;
+  delete process.env.DSH_PROFILE_MANIFEST;
+  delete process.env.APP_DATA;
+  try {
+    assert.match(profileManifest(), /dsh-desktop[\\/]harness[\\/]profiles[\\/]web[\\/]package\.json$/);
+  } finally {
+    process.env.DSH_PROFILE_MANIFEST = savedManifest;
+    if (savedAppData === undefined) delete process.env.APP_DATA;
+    else process.env.APP_DATA = savedAppData;
+  }
 });
 
 test("mounting keeps the bundle entry last without touching other fields", async () => {

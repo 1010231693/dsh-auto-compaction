@@ -48,12 +48,12 @@ async function loadGenerator() {
 }
 
 /** The profile manifest DSH composes its layers from. */
-function profileManifest() {
+export function profileManifest() {
   const override = process.env.DSH_PROFILE_MANIFEST;
   if (typeof override === "string" && override.trim().length > 0) return override.trim();
   const appData = process.env.APP_DATA
-    ?? path.join(process.env.SystemDrive ?? "C:", "Users", process.env.USERNAME ?? process.env.USER ?? "", "AppData", "Roaming");
-  return path.join(appData, "dsh-desktop", "harness", "profiles", "web", "package.json");
+    ?? join(process.env.SystemDrive ?? "C:", "Users", process.env.USERNAME ?? process.env.USER ?? "", "AppData", "Roaming");
+  return join(appData, "dsh-desktop", "harness", "profiles", "web", "package.json");
 }
 
 /**
