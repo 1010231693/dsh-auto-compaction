@@ -19,6 +19,10 @@
 
 > English: a session auto-compaction plugin that is friendly to local models — compaction never makes the local engine re-read history, saving a lot of time; both the trigger point and the saved content of the compacted session are user-configurable.
 
+## 更新
+
+- **0.2.5**：修复 0.2.4 在激活时抛 `path is not defined`、导致接管行没有按本机预设重新生成的问题（设置页会显示部分预设「未覆盖」，按预设列表里也看不到它们）；同时补上默认路径解析的回归测试。装好后重启一次即可接管全部预设。
+
 ## 组成
 
 | 包 | 作用 | 挂载方式 |
