@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-compaction",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -8,7 +8,7 @@
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
-  "description": "Settings page (设置 → 会话压缩) for A session auto-compaction plugin that is friendly to local models: compaction never makes the local engine re-read history, saving a lot of time; the trigger point and the saved content of the compacted session are user-configurable.",
+  "description": "Settings page (设置 → 会话压缩) for a session auto-compaction plugin that is friendly to local models: the trigger point is configurable, compaction does not make the local engine re-read the whole history, and the model writes a structured handoff summary from the prefix that is already cached.",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
@@ -51,6 +51,6 @@
     "access": "public"
   },
   "dependencies": {
-    "dsh-auto-compaction-engine": "^0.2.5"
+    "dsh-auto-compaction-engine": "^0.2.6"
   }
 }

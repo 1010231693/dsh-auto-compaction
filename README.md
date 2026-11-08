@@ -2,7 +2,7 @@
 
 <p align="center"><img src="docs/icon.png" width="120" height="120" alt="dsh-auto-compaction icon"></p>
 
-**一个对本地模型十分友好的会话自动压缩插件，压缩时不会触发本地模型重读历史，节约大量时间，压缩触发时机，压缩会话的保存内容可由用户自定义。**
+**一个对本地模型友好的会话自动压缩插件：可自定义压缩触发点，不会使本地引擎重读全部历史，并让模型基于已缓存的前缀撰写结构化交接摘要，触发比例、摘要模板、显示样式与逐预设生效范围均可配置。安装重启 DSH 后接管；卸载即恢复DSH原生压缩。**
 
 ![设置 → 会话压缩](docs/settings.png)
 
@@ -17,10 +17,11 @@
 - **可随时停用**：设置页顶部的「启用插件」开关关闭后，压缩立即交回 DSH 原生实现（自动阈值与 `/compact` 都是原生摘要），无需重启、不卸载插件。
 - **设置页**：`设置 → 会话压缩`，滑条吸附 5%、数字框不吸附，保存即生效（边车文件）。
 
-> English: a session auto-compaction plugin that is friendly to local models — compaction never makes the local engine re-read history, saving a lot of time; both the trigger point and the saved content of the compacted session are user-configurable.
+> English: a session auto-compaction plugin that is friendly to local models — the trigger point is configurable, compaction does not make the local engine re-read the whole history, and the model writes a structured handoff summary from the prefix that is already cached. Trigger ratio, summary template, display style and per-preset scope are configurable. Installing and restarting DSH takes over; uninstalling restores native DSH compaction.
 
 ## 更新
 
+- **0.2.6**：重写插件介绍，明确压缩触发点可自定义，并同步更新中英文市场条目；无功能改动。
 - **0.2.5**：修复 0.2.4 在激活时抛 `path is not defined`、导致接管行没有按本机预设重新生成的问题（设置页会显示部分预设「未覆盖」，按预设列表里也看不到它们）；同时补上默认路径解析的回归测试。装好后重启一次即可接管全部预设。
 
 ## 组成
