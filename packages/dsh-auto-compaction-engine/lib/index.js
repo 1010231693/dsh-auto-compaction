@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { BlockAssembler, LlmError, contentHasImage } from "@deepseek-ai/dsh-llm";
 import BasicCompactionEngine from "@deepseek-ai/dsh-compaction-basic";
 import { decideTrigger, shouldAttempt } from "./plan.js";
+import { appendHistory, countWords } from "./history.js";
 import { writeStatus } from "./status.js";
 import {
   continuationInstruction,
@@ -37,6 +38,9 @@ import {
 
 const LOG = "[handoff]";
 const MAX_SUMMARY_ATTEMPTS = 3;
+// The timeline shows the handoff document; a pathological one must not bloat
+// the append-only history. 20k chars is ~7k Chinese tokens.
+const MAX_STORED_SUMMARY_CHARS = 20_000;
 
 const SETTINGS_DIR = join(homedir(), ".dsh-handoff-compaction");
 // Test harnesses point this at a missing file so the live sidecar cannot leak
@@ -230,6 +234,11 @@ export default class HandoffCompaction extends BasicCompactionEngine {
     this.running = new WeakSet();
     this.timers = new WeakMap();
     this.agents = new WeakMap();
+    // Latest trigger decision and summary payload per agent, consumed once the
+    // stock transaction commits. WeakMaps keep a finished conversation from
+    // pinning the engine's memory.
+    this.decisions = new WeakMap();
+    this.summaries = new WeakMap();
     ctx.on("agent/status", ({ agent, status }) => {
       if (agent?.session) this.agents.set(agent.session, agent);
       if (status === "idle") this.scheduleCheck(agent, "agent/status idle");
@@ -354,6 +363,12 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       if (!decision.trigger) {
         return this.log(`${why}: ${measurement.totalTokens}/${decision.thresholdTokens ?? "?"} tokens${decision.ok === false ? ` (${decision.reason})` : ""}`);
       }
+      this.decisions.set(agent, {
+        at: Date.now(),
+        thresholdTokens: decision.thresholdTokens,
+        contextWindow,
+        ratio: liveRatio ?? this.config.thresholdRatio ?? 0.9,
+      });
 
       const last = this.attempts.get(agent);
       if (!shouldAttempt({
@@ -444,8 +459,47 @@ export default class HandoffCompaction extends BasicCompactionEngine {
     // no handoff template, no plugin status sidecar.
     if (!this.handoffEnabled()) return super.compactNow(agent, signal, sourceCommandId);
     const sessionId = agent?.session?.id;
+    const startedAt = Date.now();
+    const trigger = typeof sourceCommandId === "string" && sourceCommandId.length > 0 ? "manual" : "auto";
+    // A previous attempt's payload must not leak into this record.
+    this.summaries.delete(agent);
     let totalTokens;
     try { totalTokens = this.ctx.tokenMeter.measure(agent.session).totalTokens; } catch { totalTokens = undefined; }
+    // Manual /compact carries no trigger decision of its own; derive the same
+    // numbers the idle gate would use so the timeline can show the ratio. This
+    // is arithmetic plus a cached model lookup — no model call.
+    if (typeof totalTokens === "number") {
+      try {
+        const target = this.routedTarget(agent);
+        if (target !== undefined) {
+          const info = await this.ctx.llm.resolveModelInfo(target.provider, target.model);
+          const headerMaxTokens = agent.session?.requestHeader?.()?.config?.maxTokens;
+          const reserved = this.handoff.reservedOverride >= 0
+            ? this.handoff.reservedOverride
+            : (headerMaxTokens ?? info.defaultMaxTokens ?? 0);
+          const contextWindow = this.handoff.contextWindowOverride > 0
+            ? this.handoff.contextWindowOverride
+            : info.context?.contextWindow;
+          const live = readSettings();
+          const ratio = typeof live?.thresholdRatio === "number" && live.thresholdRatio > 0 && live.thresholdRatio <= 1
+            ? live.thresholdRatio
+            : (this.config.thresholdRatio ?? 0.9);
+          const decision = decideTrigger({
+            totalTokens,
+            contextWindow,
+            reservedCompletionTokens: reserved,
+            headroomTokens: this.config.headroomTokens ?? 0,
+            thresholdRatio: ratio,
+          });
+          this.decisions.set(agent, {
+            at: Date.now(),
+            thresholdTokens: decision.thresholdTokens,
+            contextWindow,
+            ratio,
+          });
+        }
+      } catch (error) { /* statistics only; the transaction still proceeds */ }
+    }
     writeStatus(sessionId, {
       phase: "running",
       step: "prepare",
@@ -471,6 +525,7 @@ export default class HandoffCompaction extends BasicCompactionEngine {
         writing: false,
         ...(result === null || result === undefined ? { note: "no compactable range" } : {}),
       });
+      if (result !== null && result !== undefined) this.recordHistory(agent, startedAt, trigger, totalTokens, result);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -485,11 +540,73 @@ export default class HandoffCompaction extends BasicCompactionEngine {
     }
   }
 
+  /**
+   * Append one timeline record after a committed compaction. Everything here
+   * is arithmetic over values the engine already has — the document, the token
+   * counts and the clocks — so the timeline costs no model calls.
+   */
+  recordHistory(agent, startedAt, trigger, beforeTokens, result) {
+    try {
+      const sessionId = agent?.session?.id;
+      const summary = this.summaries.get(agent);
+      if (sessionId === undefined || summary === undefined) return;
+      const decision = this.decisions.get(agent);
+      const usage = summary.usage !== null && typeof summary.usage === "object" ? summary.usage : {};
+      const outputTokens = typeof usage.outputTokens === "number" ? usage.outputTokens : undefined;
+      const shadowedNodes = Array.isArray(result?.shadowedSeqs) ? result.shadowedSeqs.length : 0;
+      const shadowedTokens = typeof result?.shadowedTokenCount === "number" ? result.shadowedTokenCount : 0;
+      const counts = countWords(summary.text);
+      const stored = summary.text.length > MAX_STORED_SUMMARY_CHARS
+        ? summary.text.slice(0, MAX_STORED_SUMMARY_CHARS)
+        : summary.text;
+      const completedAt = Date.now();
+      const afterTokens = typeof beforeTokens === "number"
+        ? Math.max(0, beforeTokens - shadowedTokens + (outputTokens ?? 0))
+        : undefined;
+      appendHistory(sessionId, {
+        v: 1,
+        startedAt,
+        completedAt,
+        durationMs: completedAt - startedAt,
+        summaryMs: summary.completedAt - summary.startedAt,
+        trigger,
+        beforeTokens,
+        afterTokens,
+        thresholdTokens: decision?.thresholdTokens,
+        contextWindow: decision?.contextWindow,
+        triggerRatio: decision?.ratio,
+        shadowedNodes,
+        shadowedTokens,
+        summaryChars: summary.text.length,
+        cjk: counts.cjk,
+        words: counts.words,
+        summaryTokens: outputTokens,
+        usage: {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cacheReadTokens: usage.cacheReadTokens,
+          cacheWriteTokens: usage.cacheWriteTokens,
+        },
+        attempts: summary.attempts,
+        truncated: stored.length < summary.text.length || undefined,
+        summary: stored,
+        provider: summary.provider,
+        model: summary.model,
+        presetId: this.handoff.presetId || undefined,
+      });
+    } catch (error) {
+      // A committed compaction must stay committed even when the timeline
+      // cannot be written.
+      this.log(`history write skipped: ${error instanceof Error ? error.message : String(error)}`, "warn");
+    }
+  }
+
   /** Handoff template instead of the stock compaction instruction. */
   async summarize(input, agent, signal) {
     // Native pressure/overflow compaction runs through this same hook, so the
     // stock prompt must come back the moment the plugin is switched off.
     if (!this.handoffEnabled()) return super.summarize(input, agent, signal);
+    const summaryStartedAt = Date.now();
     const latest = agent.session.requestHeader?.()?.config;
     const configured = this.config.summarizationProvider && this.config.summarizationModel
       ? { provider: this.config.summarizationProvider, model: this.config.summarizationModel }
@@ -635,6 +752,18 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       missingSections: [],
       summaryChars: finalText.length,
       summaryAttempts: attempts,
+    });
+
+    // Consumed by compactNow once the stock transaction commits; a failed or
+    // abandoned transaction simply leaves the entry unread.
+    this.summaries.set(agent, {
+      text: finalText,
+      usage,
+      attempts,
+      provider: target.provider,
+      model: target.model,
+      startedAt: summaryStartedAt,
+      completedAt: Date.now(),
     });
 
     return {

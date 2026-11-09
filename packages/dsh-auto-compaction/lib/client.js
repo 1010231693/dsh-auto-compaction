@@ -690,6 +690,365 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /* ---------- compaction timeline ---------- */
+
+    var TIMELINE_STYLE_ID = "dsh-auto-compaction-timeline-style";
+    var TL_ACCENT_DARK = "#8fb6d4";
+    var TL_ACCENT_LIGHT = "#4a7391";
+
+    /** Cool steel on dark themes, a deeper steel when the app is light. */
+    function accentColor() {
+      try {
+        var matches = (getComputedStyle(document.body).backgroundColor || "").match(/\d+/g);
+        if (matches !== null && matches.length >= 3) {
+          var lum = 0.299 * Number(matches[0]) + 0.587 * Number(matches[1]) + 0.114 * Number(matches[2]);
+          if (lum > 150) return TL_ACCENT_LIGHT;
+        }
+      } catch (error) { /* keep the dark accent */ }
+      return TL_ACCENT_DARK;
+    }
+
+    function ensureTimelineStyles() {
+      try {
+        if (typeof document === "undefined" || document.getElementById(TIMELINE_STYLE_ID) !== null) return;
+        var style = document.createElement("style");
+        style.id = TIMELINE_STYLE_ID;
+        style.textContent = [
+          ".dsh-tl{position:fixed;z-index:6;display:flex;flex-direction:column;min-height:0;pointer-events:auto;",
+          "transform:translateY(-50%);",
+          "font-family:var(--dsh-font-sans,system-ui,'Segoe UI','Microsoft YaHei',sans-serif)}",
+          ".dsh-tl-head{display:flex;align-items:baseline;justify-content:space-between;padding:0 6px 10px;font-size:11px}",
+          ".dsh-tl-head b{font-weight:600;color:var(--dsw-alias-label-primary,#dfe3e6)}",
+          ".dsh-tl-head span{font-family:ui-monospace,Consolas,monospace;font-size:10px;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-tl-list{position:relative;flex:1;min-height:0;overflow:auto;padding:14px 4px 16px;scrollbar-width:thin}",
+          ".dsh-tl-list::before{content:'';position:absolute;left:78px;top:16px;bottom:16px;width:1px;",
+          "background:linear-gradient(180deg,transparent,var(--dsw-alias-border-l2,#2c3a45),transparent)}",
+          ".dsh-tl-ev{display:grid;grid-template-columns:64px 24px minmax(0,1fr);gap:4px;align-items:center;width:100%;",
+          "background:none;border:0;color:inherit;cursor:pointer;padding:14px 4px;margin-bottom:30px;border-radius:8px;text-align:left}",
+          ".dsh-tl-ev:last-child{margin-bottom:0}",
+          ".dsh-tl-ev:hover{background:rgba(143,182,212,.08)}",
+          ".dsh-tl-time{font-family:ui-monospace,Consolas,monospace;font-size:11px;text-align:right;",
+          "color:var(--dsw-alias-label-primary,#d3e0e9);font-variant-numeric:tabular-nums}",
+          ".dsh-tl-dot{display:block;width:8px;height:8px;margin:0 auto;border-radius:50%;",
+          "background:var(--dsw-alias-bg-primary,#0e1114);border:1.5px solid var(--dsh-tl-accent,#8fb6d4);opacity:.75;",
+          "transition:transform .12s,opacity .12s}",
+          ".dsh-tl-ev:hover .dsh-tl-dot{opacity:1;transform:scale(1.15)}",
+          ".dsh-tl-meta{font-size:10.5px;line-height:1.5;color:var(--dsw-alias-label-secondary,#88939c);",
+          "font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+          ".dsh-tl-meta b{font-weight:500;color:var(--dsw-alias-label-primary,#c9d6e0)}",
+          // Compact gutter: stack time over metrics, keep the rail at the left.
+          ".dsh-tl--compact .dsh-tl-ev{grid-template-columns:20px minmax(0,1fr);row-gap:1px}",
+          ".dsh-tl--compact .dsh-tl-list::before{left:14px}",
+          ".dsh-tl--compact .dsh-tl-time{grid-column:2;grid-row:1;text-align:left}",
+          ".dsh-tl--compact .dsh-tl-ev>span:nth-child(2){grid-column:1;grid-row:1/3}",
+          ".dsh-tl--compact .dsh-tl-meta{grid-column:2;grid-row:2}",
+          ".dsh-tl-backdrop{position:fixed;inset:0;z-index:200;background:rgba(6,9,11,.66);backdrop-filter:blur(5px);",
+          "display:flex;align-items:center;justify-content:center;padding:24px}",
+          ".dsh-tl-modal{width:min(1000px,92vw);height:min(660px,84vh);display:flex;flex-direction:column;overflow:hidden;",
+          "background:var(--dsw-alias-bg-layer-3,#161d24);border:1px solid rgba(143,182,212,.22);border-radius:14px;",
+          "box-shadow:0 40px 100px rgba(0,0,0,.6)}",
+          ".dsh-tl-mh{display:flex;align-items:center;gap:12px;padding:14px 20px;",
+          "border-bottom:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.09))}",
+          ".dsh-tl-mh h3{margin:0;font-size:13.5px;font-weight:600;color:var(--dsw-alias-label-primary,#eaf1f6)}",
+          ".dsh-tl-mh small{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-tl-x{margin-left:auto;width:26px;height:26px;border-radius:6px;font-size:12px;line-height:1;",
+          "border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));background:none;cursor:pointer;",
+          "color:var(--dsw-alias-label-secondary,#93a2ae)}",
+          ".dsh-tl-x:hover{color:var(--dsw-alias-label-primary,#fff)}",
+          ".dsh-tl-mb{flex:1;display:grid;grid-template-columns:352px minmax(0,1fr);min-height:0}",
+          ".dsh-tl-stats{padding:18px 20px 16px;overflow:auto;",
+          "border-right:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08))}",
+          ".dsh-tl-hero{display:flex;align-items:center;gap:14px;margin-bottom:14px}",
+          ".dsh-tl-ring{position:relative;width:84px;height:84px;flex:none}",
+          ".dsh-tl-ring figcaption{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;",
+          "justify-content:center;font-family:ui-monospace,Consolas,monospace;font-size:13px;",
+          "color:var(--dsw-alias-label-primary,#eaf1f6)}",
+          ".dsh-tl-ring figcaption small{font-size:8.5px;margin-top:2px;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-tl-hero p{margin:0;font-size:11px;line-height:1.75;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-tl-hero p b{display:block;margin-bottom:2px;white-space:nowrap;font-weight:500;",
+          "font-family:ui-monospace,Consolas,monospace;font-size:15.5px;color:var(--dsw-alias-label-primary,#eaf1f6)}",
+          ".dsh-tl-rows{border-top:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08))}",
+          ".dsh-tl-row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;font-size:11px;",
+          "border-bottom:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));",
+          "color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-tl-row b{font-weight:500;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;",
+          "color:var(--dsw-alias-label-primary,#dbe6ee)}",
+          ".dsh-tl-note{font-size:10px;line-height:1.7;margin:12px 0 0;color:var(--dsw-alias-label-tertiary,#6c7c88)}",
+          ".dsh-tl-docwrap{display:flex;flex-direction:column;min-height:0;padding:14px 18px 18px}",
+          ".dsh-tl-doctitle{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;",
+          "font-size:10.5px;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-tl-doctitle b{font-weight:500;color:var(--dsw-alias-label-primary,#c9d5de)}",
+          ".dsh-tl-doc{margin:0;flex:1;overflow:auto;white-space:pre-wrap;font-size:11.5px;line-height:1.85;",
+          "color:var(--dsw-alias-label-primary,#c8d5df);background:var(--dsw-alias-bg-layer-1,#10161b);",
+          "border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));border-radius:10px;padding:14px 16px}",
+          "@media (max-width:900px){.dsh-tl-modal{width:96vw;height:88vh}",
+          ".dsh-tl-mb{grid-template-columns:1fr}.dsh-tl-stats{border-right:0;",
+          "border-bottom:1px solid rgba(255,255,255,.08)}}",
+        ].join("");
+        document.head.appendChild(style);
+      } catch (error) { /* styling must never break the timeline */ }
+    }
+
+    function fetchHistory(connection, sessionId) {
+      return call(connection, "history", { sessionId: sessionId, limit: 60 }, 3500);
+    }
+
+    function two(n) { return String(n).padStart(2, "0"); }
+    function clockOf(ts) {
+      var d = new Date(Number(ts) || 0);
+      return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds());
+    }
+    function dateOf(ts) {
+      var d = new Date(Number(ts) || 0);
+      return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate());
+    }
+    function durationText(ms) {
+      var n = Number(ms);
+      if (!Number.isFinite(n) || n < 0) return "—";
+      if (n < 60000) return (n / 1000).toFixed(1) + " s";
+      var total = Math.round(n / 1000);
+      return Math.floor(total / 60) + " m " + two(total % 60) + " s";
+    }
+    function wordText(event) {
+      var cjk = Number(event.cjk);
+      var words = Number(event.words);
+      if (Number.isFinite(cjk) || Number.isFinite(words)) {
+        return fmt(Number.isFinite(cjk) ? cjk : 0) + " 字" + (Number.isFinite(words) && words > 0 ? " · " + fmt(words) + " 词" : "");
+      }
+      return fmt(Number(event.summaryChars) || 0) + " 字符";
+    }
+
+    /**
+     * Sit in the empty gutter left of the message column. Measured instead of
+     * hard-coded so the timeline follows window resizes and the sidebar; when
+     * the gutter is too narrow it hides rather than covering the conversation.
+     */
+    function timelinePlacement() {
+      var out = { left: 12, top: 96, width: 248, height: 0, visible: false, compact: false };
+      try {
+        var content = document.querySelector("[data-conversation-content]");
+        var cr = content && content.getBoundingClientRect();
+        if (!cr || cr.height <= 140) return out;
+        // Content and scroll hooks can both report left = 0 (they wrap the
+        // whole window), so the sidebar's right edge is the real gutter bound.
+        var sidebar = document.querySelector("[data-dsh-sidebar-root]");
+        var br = sidebar && sidebar.getBoundingClientRect();
+        var scrollBody = document.querySelector("[data-conversation-scroll]");
+        var sr2 = scrollBody && scrollBody.getBoundingClientRect();
+        var contentLeft = Math.round(Math.max(
+          br && br.width > 100 ? br.right : 0,
+          cr.left,
+          sr2 && sr2.height > 100 ? sr2.left : 0
+        ));
+        // The message column's left edge: the composer card is inset by its
+        // own side clearance, and a chat turn's wrapper matches the column.
+        var card = document.querySelector("[data-composer-card]");
+        var kr = card && card.getBoundingClientRect();
+        var clearance = 0;
+        if (kr !== undefined && kr !== null) {
+          try { clearance = parseFloat(getComputedStyle(card).getPropertyValue("--dsh-composer-side-clearance")) || 0; } catch (error) { clearance = 0; }
+        }
+        var turn = document.querySelector("[data-chat-turn]");
+        var tr = turn && turn.getBoundingClientRect();
+        var seat = document.querySelector("[data-composer-seat]");
+        var sr = seat && seat.getBoundingClientRect();
+        var candidates = [];
+        if (kr !== null && kr !== undefined && kr.width > 120) candidates.push(kr.left + clearance);
+        if (tr && tr.width > 200) candidates.push(tr.left);
+        if (sr && sr.width > 200) candidates.push(sr.left);
+        var columnLeft = candidates.length > 0
+          ? Math.round(Math.max.apply(null, candidates))
+          : contentLeft + 96;
+
+        // A short list reads better beside the middle of the conversation than
+        // pinned under the tabs; the panel is centred on the content area and
+        // only caps its height when many entries accumulate.
+        out.top = Math.round(cr.top + cr.height / 2);
+        out.height = Math.round(cr.height) - 16;
+        var width = Math.min(248, columnLeft - contentLeft - 24);
+        var left = columnLeft - width - 12;
+        if (left < contentLeft + 8) {
+          left = contentLeft + 8;
+          width = columnLeft - left - 12;
+        }
+        out.left = Math.round(left);
+        out.width = Math.round(width);
+        out.compact = out.width < 190;
+        // Below ~130px even the stacked layout stops being readable: hide
+        // rather than cover the sidebar or the messages.
+        out.visible = out.height > 220 && out.width >= 130;
+      } catch (error) { /* hidden when the layout cannot be measured */ }
+      return out;
+    }
+
+    function TimelineDock(props) {
+      ensureTimelineStyles();
+      var connection = props.connection;
+      var sessionId = props.sessionId;
+
+      var eventsState = React.useState([]);
+      var events = eventsState[0], setEvents = eventsState[1];
+      var placeState = React.useState(function () { return timelinePlacement(); });
+      var place = placeState[0], setPlace = placeState[1];
+      var openState = React.useState(-1);
+      var openIndex = openState[0], setOpenIndex = openState[1];
+
+      React.useEffect(function () {
+        function update() { setPlace(timelinePlacement()); }
+        update();
+        window.addEventListener("resize", update);
+        var timer = setInterval(update, 2000);
+        return function () { window.removeEventListener("resize", update); clearInterval(timer); };
+      }, []);
+
+      React.useEffect(function () {
+        if (!connection || !sessionId) return undefined;
+        var alive = true;
+        var timer;
+        function poll() {
+          fetchHistory(connection, sessionId).then(function (value) {
+            if (!alive) return;
+            var list = value && Array.isArray(value.events) ? value.events : [];
+            setEvents(list);
+            setOpenIndex(function (current) { return current >= list.length ? -1 : current; });
+            timer = setTimeout(poll, 5000);
+          }).catch(function () {
+            if (!alive) return;
+            timer = setTimeout(poll, 8000);
+          });
+        }
+        poll();
+        return function () { alive = false; if (timer !== undefined) clearTimeout(timer); };
+      }, [connection, sessionId]);
+
+      React.useEffect(function () {
+        if (openIndex < 0) return undefined;
+        function onKey(ev) { if (ev.key === "Escape") setOpenIndex(-1); }
+        document.addEventListener("keydown", onKey);
+        return function () { document.removeEventListener("keydown", onKey); };
+      }, [openIndex]);
+
+      if (events.length === 0 || !place.visible) return null;
+
+      var accent = accentColor();
+      var active = openIndex >= 0 && openIndex < events.length ? events[openIndex] : null;
+      // Same direction as the conversation: oldest at the top, newest at the
+      // bottom, so a new compaction lands where the eye already is.
+      var ordered = events;
+
+      var panel = h("div", {
+        className: "dsh-tl" + (place.compact ? " dsh-tl--compact" : ""),
+        "data-dsh-handoff-timeline": "1",
+        style: {
+          left: place.left + "px",
+          top: place.top + "px",
+          width: place.width + "px",
+          maxHeight: place.height + "px",
+          "--dsh-tl-accent": accent,
+        },
+      },
+        h("div", { className: "dsh-tl-head" }, h("b", null, "压缩事件")),
+        h("div", { className: "dsh-tl-list" },
+          ordered.map(function (event) {
+            var realIndex = events.indexOf(event);
+            return h("button", {
+              key: String(event.startedAt || realIndex),
+              type: "button",
+              className: "dsh-tl-ev",
+              title: "查看这次压缩的详情",
+              onClick: function () { setOpenIndex(realIndex); },
+            },
+              h("span", { className: "dsh-tl-time" }, clockOf(event.startedAt)),
+              h("span", null, h("span", { className: "dsh-tl-dot" })),
+              h("span", { className: "dsh-tl-meta" },
+                durationText(event.durationMs) + " · ",
+                h("b", null, fmt(Number(event.cjk) || 0) + " 字")
+              )
+            );
+          })
+        )
+      );
+
+      var modal = null;
+      if (active !== null) {
+        var before = Number(active.beforeTokens);
+        var windowTokens = Number(active.contextWindow);
+        var after = Number(active.afterTokens);
+        var threshold = Number(active.thresholdTokens);
+        var summaryTokens = Number(active.summaryTokens);
+        var pctValue = before > 0 && windowTokens > 0 ? (before / windowTokens) * 100 : null;
+        var ringSize = 84, ringR = ringSize / 2 - 7;
+        var ringC = 2 * Math.PI * ringR, ringCenter = ringSize / 2;
+        var filled = pctValue === null ? 0 : Math.max(0, Math.min(100, pctValue));
+        var attempts = Array.isArray(active.attempts) ? active.attempts : [];
+        var ring = h("figure", { className: "dsh-tl-ring" },
+          h("svg", { viewBox: "0 0 " + ringSize + " " + ringSize, width: ringSize, height: ringSize, "aria-hidden": "true" },
+            h("circle", { cx: ringCenter, cy: ringCenter, r: ringR, fill: "none", stroke: "rgba(143,182,212,.18)", strokeWidth: 7 }),
+            h("circle", {
+              cx: ringCenter, cy: ringCenter, r: ringR, fill: "none", stroke: accent, strokeWidth: 7, strokeLinecap: "round",
+              strokeDasharray: (ringC * filled / 100).toFixed(1) + " " + ringC.toFixed(1),
+              transform: "rotate(-90 " + ringCenter + " " + ringCenter + ")",
+            })
+          ),
+          h("figcaption", null, pctValue === null ? "—" : pctValue.toFixed(1) + "%", h("small", null, "占窗口"))
+        );
+
+        var rows = [
+          ["压缩用时", durationText(active.durationMs) + (Number(active.summaryMs) > 0 ? "（摘要 " + durationText(active.summaryMs) + "）" : "")],
+          ["触发方式", active.trigger === "manual" ? "手动 /compact" : "自动（空闲时）"],
+          ["交接文档", wordText(active)],
+          ["摘要输出", Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
+          ["替换历史", (fmt(Number(active.shadowedNodes) || 0) + " 条 / " + fmt(Number(active.shadowedTokens) || 0) + " tokens")],
+          ["闸门", String(attempts.length || 1) + " 次 · 缺失 0 节"],
+          ["模型", [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
+        ];
+
+        modal = h("div", {
+          className: "dsh-tl-backdrop",
+          "data-dsh-handoff-timeline-modal": "1",
+          onMouseDown: function (ev) { if (ev.target === ev.currentTarget) setOpenIndex(-1); },
+        },
+          h("div", { className: "dsh-tl-modal", role: "dialog", "aria-modal": "true", "aria-label": "压缩详情" },
+            h("div", { className: "dsh-tl-mh" },
+              h("h3", null, "第 " + String(openIndex + 1) + " 次压缩"),
+              h("small", null, dateOf(active.startedAt) + " · " + clockOf(active.startedAt)),
+              h("button", { type: "button", className: "dsh-tl-x", "aria-label": "关闭", onClick: function () { setOpenIndex(-1); } }, "×")
+            ),
+            h("div", { className: "dsh-tl-mb" },
+              h("aside", { className: "dsh-tl-stats" },
+                h("div", { className: "dsh-tl-hero" },
+                  ring,
+                  h("p", null,
+                    h("b", null, (Number.isFinite(before) ? fmt(before) : "—") + " tokens"),
+                    "触发时上下文",
+                    h("br"),
+                    "触发点阈值 " + (Number.isFinite(threshold) && threshold > 0 ? fmt(threshold) : "—"),
+                    h("br"),
+                    "压缩后 " + (Number.isFinite(after) ? fmt(after) : "—")
+                  )
+                ),
+                h("div", { className: "dsh-tl-rows" },
+                  rows.map(function (row) {
+                    return h("div", { className: "dsh-tl-row", key: row[0] }, h("span", null, row[0]), h("b", null, row[1]));
+                  })
+                ),
+                h("p", { className: "dsh-tl-note" }, "字数与时长为插件本地计算；tokens 取 DSH usage 与摘要调用 usage，不额外消耗模型算力。")
+              ),
+              h("div", { className: "dsh-tl-docwrap" },
+                h("div", { className: "dsh-tl-doctitle" }, h("b", null, "交接文档全文"), h("span", null, wordText(active))),
+                h("pre", { className: "dsh-tl-doc" }, String(active.summary || "（本次未记录交接文档）"))
+              )
+            )
+          )
+        );
+      }
+
+      return h(React.Fragment, null,
+        ReactDOM.createPortal(panel, document.body),
+        modal === null ? null : ReactDOM.createPortal(modal, document.body)
+      );
+    }
+
     function Section(props) {
       var connection = props.connection;
       var loaded = React.useState(null);
@@ -1116,11 +1475,17 @@ window.__ModuleLoader__.load({
               return { sessionId: sessionId, cancel: cancelFor(sessionId) };
             },
           }, function StatusDockView(slotProps) {
-            return h(StatusDock, {
-              connection: connection,
-              sessionId: slotProps.sessionId,
-              cancel: slotProps.cancel,
-            });
+            return h(React.Fragment, null,
+              h(StatusDock, {
+                connection: connection,
+                sessionId: slotProps.sessionId,
+                cancel: slotProps.cancel,
+              }),
+              h(TimelineDock, {
+                connection: connection,
+                sessionId: slotProps.sessionId,
+              })
+            );
           });
         });
       } catch (error) {

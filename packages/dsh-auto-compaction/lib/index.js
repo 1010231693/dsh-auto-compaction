@@ -37,6 +37,7 @@ const SETTINGS_FILE = join(DIR, "settings.json");
 const TEMPLATE_FILE = join(DIR, "template.md");
 const UI_LOG = join(DIR, "ui.log");
 const STATUS_DIR = process.env.DSH_HANDOFF_STATUS_DIR || join(DIR, "status");
+const HISTORY_DIR = process.env.DSH_HANDOFF_HISTORY_DIR || join(DIR, "history");
 const STATUS_SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 /**
@@ -54,6 +55,31 @@ function readStatus(sessionId) {
   }
 }
 const requireFromUi = createRequire(import.meta.url);
+
+/**
+ * Read the append-only compaction history. Same shape the engine writes, read
+ * here rather than imported: a top-level engine import blocks DSH startup.
+ * Torn or unreadable lines are skipped individually.
+ */
+function readHistory(sessionId, limit) {
+  if (typeof sessionId !== "string" || !STATUS_SESSION_ID.test(sessionId)) return [];
+  const cap = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 200) : 100;
+  try {
+    const lines = readFileSync(join(HISTORY_DIR, sessionId + ".jsonl"), "utf8")
+      .split(/\r?\n/).filter((line) => line.trim().length > 0);
+    const events = [];
+    for (const line of lines.slice(-cap)) {
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed !== null && typeof parsed === "object") events.push(parsed);
+      } catch { /* skip torn line */ }
+    }
+    events.sort((a, b) => Number(a.startedAt ?? 0) - Number(b.startedAt ?? 0));
+    return events;
+  } catch {
+    return [];
+  }
+}
 
 function trace(message) {
   try { mkdirSync(DIR, { recursive: true }); appendFileSync(UI_LOG, new Date().toISOString() + " " + message + String.fromCharCode(10), "utf8"); } catch { /* ignore */ }
@@ -293,6 +319,13 @@ export function apply(ctx, config = {}) {
             // sidecar left over from a compaction that ran before the switch.
             if (readSettings()?.enabled === false) return { ok: true, value: null };
             return { ok: true, value: readStatus(String(payload?.sessionId ?? "")) ?? null };
+          }
+          if (endpoint === "history") {
+            const sessionId = String(payload?.sessionId ?? "");
+            return {
+              ok: true,
+              value: { sessionId, events: readHistory(sessionId, Number(payload?.limit)) },
+            };
           }
           if (endpoint === "get") {
             const stored = readSettings() ?? seeded;

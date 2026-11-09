@@ -37,7 +37,7 @@ stub("@deepseek-ai/dsh-llm", "index.js", `
 export class LlmError extends Error { constructor(m, c, o) { super(m, o); this.code = c; } }
 export function contentHasImage(blocks) { return blocks.some((b) => b.type === "image"); }
 export class BlockAssembler {
-  constructor() { this._blocks = []; this.finish = { kind: "stop" }; this.usage = { input: 10, output: 20 }; }
+  constructor() { this._blocks = []; this.finish = { kind: "stop" }; this.usage = { inputTokens: 10, outputTokens: 20, cacheReadTokens: 5 }; }
   push(chunk) { if (chunk?.text) this._blocks.push({ type: "text", text: chunk.text }); }
   blocks() { return this._blocks; }
 }
@@ -45,7 +45,13 @@ export class BlockAssembler {
 stub("@deepseek-ai/dsh-compaction-basic", "index.js", `
 export default class BasicCompactionEngine {
   constructor(ctx, config) { this.ctx = ctx; this.config = { thresholdRatio: 0.9, headroomTokens: 0, maxTokens: 8192, ...config }; this.calls = []; this.native = []; }
-  async compactNow(agent, signal) { this.calls.push({ agent, hasSignal: !!(signal && typeof signal.aborted === "boolean") }); return { shadowedSeqs: ["s1", "s2"], shadowedTokenCount: 36_500 }; }
+  async compactNow(agent, signal) {
+    this.calls.push({ agent, hasSignal: !!(signal && typeof signal.aborted === "boolean") });
+    // History cases need the real order: summarize runs inside the transaction
+    // after the engine has cleared the previous payload.
+    if (this.summarizeOnCompact) await this.summarize({ messages: [{ role: "user", content: "OLD" }] }, agent, signal);
+    return { shadowedSeqs: ["s1", "s2"], shadowedTokenCount: 36_500 };
+  }
   async compactIfNeeded(agent, trigger) { this.native.push(trigger); return { shadowedSeqs: ["n1"], shadowedTokenCount: 1_000 }; }
   async summarize() { this.native.push("summarize"); return { summary: [{ type: "text", text: "NATIVE SUMMARY" }], provider: "qwen", model: "native" }; }
 }
@@ -56,6 +62,7 @@ write(TWO_SECTION_TEMPLATE, "## 用户目标与原始要求\n\n## 当前任务�
 process.env.DSH_HANDOFF_SETTINGS_FILE = path.join(SANDBOX, "settings-missing.json");
 process.env.DSH_HANDOFF_TEMPLATE = TEMPLATE;
 process.env.DSH_HANDOFF_STATUS_DIR = path.join(SANDBOX, "status");
+process.env.DSH_HANDOFF_HISTORY_DIR = path.join(SANDBOX, "history");
 process.env.DSH_HANDOFF_TRACE_FILE = path.join(SANDBOX, "trace.log");
 const { default: HandoffCompaction } = await import(pathToFileURL(path.join(SANDBOX, "lib", "index.js")).href);
 
@@ -406,6 +413,45 @@ test("scope global: presetId plays no part and the takeover stays on", async () 
   const agent = makeAgent();
   const result = await plugin.compactIfNeeded(agent, "pressure", undefined);
   if (result !== null) throw new Error("global scope delegated despite the takeover being on");
+});
+
+test("a committed compaction appends one timeline record", async () => {
+  fs.rmSync(SETTINGS, { force: true });
+  fs.rmSync(process.env.DSH_HANDOFF_HISTORY_DIR, { recursive: true, force: true });
+  const ctx = makeCtx({ totalTokens: 208_412 });
+  ctx.llm.stream = async function* () { yield { text: "## ok\n- done" }; };
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 250_000 });
+  plugin.summarizeOnCompact = true;
+  const agent = makeAgent();
+  const result = await plugin.compactNow(agent, undefined, undefined);
+  if (!result) throw new Error("no compaction result");
+  const file = path.join(process.env.DSH_HANDOFF_HISTORY_DIR, "session-test.jsonl");
+  const lines = fs.readFileSync(file, "utf8").trim().split("\n");
+  if (lines.length !== 1) throw new Error("expected one record, got " + lines.length);
+  const record = JSON.parse(lines[0]);
+  if (record.trigger !== "auto") throw new Error("trigger: " + record.trigger);
+  if (record.beforeTokens !== 208_412) throw new Error("beforeTokens: " + record.beforeTokens);
+  if (record.shadowedNodes !== 2 || record.shadowedTokens !== 36_500) throw new Error("shadowed wrong");
+  if (record.afterTokens !== 208_412 - 36_500 + 20) throw new Error("after estimate: " + record.afterTokens);
+  if (record.summaryTokens !== 20) throw new Error("summaryTokens: " + record.summaryTokens);
+  if (!String(record.summary || "").includes("## ok")) throw new Error("summary text missing");
+  if (record.cjk !== 0 || record.words !== 2) throw new Error("word counts: " + record.cjk + "/" + record.words);
+  if (!(record.durationMs >= 0)) throw new Error("duration: " + record.durationMs);
+  if (!(record.completedAt >= record.startedAt)) throw new Error("clock order");
+});
+
+test("manual /compact is recorded as a manual trigger", async () => {
+  fs.rmSync(SETTINGS, { force: true });
+  const ctx = makeCtx({ totalTokens: 50_000 });
+  ctx.llm.stream = async function* () { yield { text: "## ok\n- done" }; };
+  const plugin = new HandoffCompaction(ctx);
+  plugin.summarizeOnCompact = true;
+  const agent = makeAgent();
+  await plugin.compactNow(agent, undefined, "cmd-1");
+  const records = fs.readFileSync(path.join(process.env.DSH_HANDOFF_HISTORY_DIR, "session-test.jsonl"), "utf8")
+    .trim().split("\n").map((line) => JSON.parse(line));
+  const last = records.at(-1);
+  if (last.trigger !== "manual") throw new Error("trigger: " + last.trigger);
 });
 
 fs.rmSync(SETTINGS, { force: true });
