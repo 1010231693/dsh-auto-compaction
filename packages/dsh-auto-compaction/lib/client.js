@@ -1258,7 +1258,6 @@ window.__ModuleLoader__.load({
       var rowStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "14px 0", borderBottom: "1px solid " + C.line };
       var labelStyle = { fontSize: 13.5, fontWeight: 600, color: C.text };
       var subStyle = { fontSize: 12, color: C.muted, marginTop: 3, lineHeight: 1.6 };
-      var newBadgeStyle = { marginLeft: 6, fontSize: 10.5, color: "#8a5a00", background: "#fff3d6", border: "1px solid #f1d48a", borderRadius: 999, padding: "0 6px", lineHeight: "16px", fontWeight: 400 };
       var btnBase = { border: "1px solid " + C.line, background: "#191a1d", color: C.text, fontSize: 12, padding: "6px 11px", borderRadius: 7, cursor: "pointer", font: "inherit", whiteSpace: "nowrap" };
       var btnPrimary = Object.assign({}, btnBase, { borderColor: "rgba(76,141,255,.55)", background: "rgba(76,141,255,.14)" });
       var seg = function (active, label, onClick) {
@@ -1344,7 +1343,7 @@ window.__ModuleLoader__.load({
 
         h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
           h("div", null,
-            h("div", { style: labelStyle }, "压缩显示方式", h("span", { style: newBadgeStyle }, "新")),
+            h("div", { style: labelStyle }, "压缩显示方式"),
             h("div", { style: subStyle }, "选择压缩进行时在会话里的提示样式；保存后下一次压缩生效。")
           ),
           h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap", padding: 3, border: "1px solid " + C.line, borderRadius: 8, background: "#191a1d", width: "fit-content", maxWidth: "100%", marginTop: 9 } },
@@ -1396,7 +1395,7 @@ window.__ModuleLoader__.load({
 
         h("div", { style: { paddingTop: 14 } },
           h("div", { style: labelStyle }, "交接模板"),
-          h("div", { style: Object.assign({}, subStyle, { marginBottom: 8 }) }, "压缩时让模型按这份模板写交接文档；每次压缩时读取，改完不用重启。"),
+          h("div", { style: Object.assign({}, subStyle, { marginBottom: 8 }) }, "压缩时让模型按这份模板写交接文档；每次压缩时读取，改完不用重启。此插件模板完全基于 DSH 原生压缩模板的中文翻译版，若需要撤销自己的修改，只需要从磁盘删除该模板文件，然后重启 DSH，模板会自动重建。"),
           h("div", { style: { display: "flex", alignItems: "center", gap: 8, background: "#151619", border: "1px solid " + C.line, borderRadius: 8, padding: "7px 10px" } },
             h("input", {
               value: template, placeholder: defaultTemplate, "aria-label": "模板文件路径",
