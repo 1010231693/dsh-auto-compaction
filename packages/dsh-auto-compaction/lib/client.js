@@ -812,6 +812,34 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * DSH keeps the conversation body resident across the 对话/轨迹 tabs and
+     * swaps only the active view; the timeline is portalled to <body>, so it
+     * would otherwise float over the trajectory. The chat view's column is the
+     * only one carrying data-chat-flow, so its absence means another tab.
+     *
+     * Returns the message column's rect (the widest flow, since collapsed
+     * process groups carry the same attribute) or null while the column is
+     * unmounted or still unsized mid-switch.
+     */
+    function chatColumn(content) {
+      try {
+        var nodes = content.querySelectorAll("[data-chat-flow]");
+        var widest = null;
+        var widestWidth = 0;
+        for (var i = 0; i < nodes.length; i += 1) {
+          var rect = nodes[i].getBoundingClientRect();
+          if (rect.height > 0 && rect.width > widestWidth) {
+            widest = rect;
+            widestWidth = rect.width;
+          }
+        }
+        return widestWidth >= 200 ? widest : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
      * Sit in the empty gutter left of the message column. Measured instead of
      * hard-coded so the timeline follows window resizes and the sidebar; when
      * the gutter is too narrow it hides rather than covering the conversation.
@@ -822,45 +850,39 @@ window.__ModuleLoader__.load({
         var content = document.querySelector("[data-conversation-content]");
         var cr = content && content.getBoundingClientRect();
         if (!cr || cr.height <= 140) return out;
+        // Anchor to the message column itself. Deriving it from the composer
+        // card overestimates the left edge when the input is narrower than the
+        // chat column, which pushed the chain into the text after a switch.
+        var column = chatColumn(content);
+        if (column === null) return out;
+        var columnLeft = Math.round(column.left);
         // Content and scroll hooks can both report left = 0 (they wrap the
         // whole window), so the sidebar's right edge is the real gutter bound.
         var sidebar = document.querySelector("[data-dsh-sidebar-root]");
         var br = sidebar && sidebar.getBoundingClientRect();
-        var scrollBody = document.querySelector("[data-conversation-scroll]");
+        var scrollBody = content.querySelector("[data-conversation-scroll]");
         var sr2 = scrollBody && scrollBody.getBoundingClientRect();
         var contentLeft = Math.round(Math.max(
           br && br.width > 100 ? br.right : 0,
           cr.left,
           sr2 && sr2.height > 100 ? sr2.left : 0
         ));
-        // The message column's left edge: the composer card is inset by its
-        // own side clearance, and a chat turn's wrapper matches the column.
-        var card = document.querySelector("[data-composer-card]");
-        var kr = card && card.getBoundingClientRect();
-        var clearance = 0;
-        if (kr !== undefined && kr !== null) {
-          try { clearance = parseFloat(getComputedStyle(card).getPropertyValue("--dsh-composer-side-clearance")) || 0; } catch (error) { clearance = 0; }
-        }
-        var turn = document.querySelector("[data-chat-turn]");
-        var tr = turn && turn.getBoundingClientRect();
-        var seat = document.querySelector("[data-composer-seat]");
-        var sr = seat && seat.getBoundingClientRect();
-        var candidates = [];
-        if (kr !== null && kr !== undefined && kr.width > 120) candidates.push(kr.left + clearance);
-        if (tr && tr.width > 200) candidates.push(tr.left);
-        if (sr && sr.width > 200) candidates.push(sr.left);
-        var columnLeft = candidates.length > 0
-          ? Math.round(Math.max.apply(null, candidates))
-          : contentLeft + 96;
-
-        // A short list reads better beside the middle of the conversation than
-        // pinned under the tabs; the panel is centred on the content area and
-        // only caps its height when many entries accumulate.
-        out.top = Math.round(cr.top + cr.height / 2);
-        out.height = Math.round(cr.height) - 16;
+        // Follow the native turn rail: it is centred in the scroll viewport minus the
+        // composer and capped at 420px (see the rail's frame CSS). Centring on the
+        // whole content area instead sits the chain lower than the rail, because
+        // the composer occupies its bottom.
+        var viewportTop = sr2 && sr2.height > 200 ? sr2.top : cr.top;
+        var viewportHeight = sr2 && sr2.height > 200 ? sr2.height : cr.height;
+        var seatEl = content.querySelector("[data-composer-seat]");
+        var seatRect = seatEl && seatEl.getBoundingClientRect();
+        var composerHeight = seatRect && seatRect.height >= 48 ? seatRect.height : 152;
+        var band = viewportHeight - composerHeight;
+        if (band < 200) return out;
+        out.top = Math.round(viewportTop + band / 2);
+        out.height = Math.round(band);
         // The chain lives in a fixed centred band; spacing adapts inside it so
         // a long history never pushes entries past the conversation edges.
-        out.regionHeight = Math.round(cr.height * 0.62);
+        out.regionHeight = Math.round(Math.min(band - 64, 420));
         var width = Math.min(248, columnLeft - contentLeft - 24);
         var left = columnLeft - width - 12;
         if (left < contentLeft + 8) {
@@ -890,11 +912,61 @@ window.__ModuleLoader__.load({
       var openIndex = openState[0], setOpenIndex = openState[1];
 
       React.useEffect(function () {
-        function update() { setPlace(timelinePlacement()); }
+        var pending = [];
+        function clearPending() {
+          for (var i = 0; i < pending.length; i += 1) clearTimeout(pending[i]);
+          pending = [];
+        }
+        function update() {
+          clearPending();
+          observeSeat();
+          setPlace(timelinePlacement());
+        }
+        // Tab and session switches re-mount the view; the column reports an
+        // unsized/mid-transition width for a few frames, so re-measure shortly
+        // after the switch instead of leaving the chain at a stale offset.
+        function settle() {
+          update();
+          var delays = [80, 300, 900];
+          for (var i = 0; i < delays.length; i += 1) {
+            pending.push(setTimeout(function () { setPlace(timelinePlacement()); }, delays[i]));
+          }
+        }
         update();
         window.addEventListener("resize", update);
         var timer = setInterval(update, 2000);
-        return function () { window.removeEventListener("resize", update); clearInterval(timer); };
+        // Tab buttons only signal the swap through aria-selected (session tree
+        // items too); watching that one attribute reacts on the next frame.
+        var observer = null;
+        try {
+          observer = new MutationObserver(settle);
+          observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
+        } catch (error) { observer = null; }
+        // The native rail tracks the composer height; so does ours now. A growing
+        // input (multi-line draft) would otherwise leave the chain misaligned for
+        // up to the 2s tick.
+        var seatObserver = null;
+        var observedSeat = null;
+        function observeSeat() {
+          if (!seatObserver) return;
+          var content = document.querySelector("[data-conversation-content]");
+          var seat = content === null ? null : content.querySelector("[data-composer-seat]");
+          if (seat === observedSeat) return;
+          if (observedSeat !== null) seatObserver.unobserve(observedSeat);
+          observedSeat = seat;
+          if (seat !== null) seatObserver.observe(seat);
+        }
+        try {
+          seatObserver = new ResizeObserver(function () { update(); observeSeat(); });
+          observeSeat();
+        } catch (error) { seatObserver = null; }
+        return function () {
+          window.removeEventListener("resize", update);
+          clearInterval(timer);
+          clearPending();
+          if (observer !== null) observer.disconnect();
+          if (seatObserver !== null) seatObserver.disconnect();
+        };
       }, []);
 
       React.useEffect(function () {
