@@ -18,6 +18,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { mountTakeover, presetInventory, readRowMaxTokens } from "./takeover-mount.js";
+import { installRootAutoGuard } from "./root-auto-guard.js";
 
 export const name = "dsh-auto-compaction";
 export const inject = [];
@@ -310,6 +311,22 @@ export function apply(ctx, config = {}) {
   });
   void handleOpen(ctx, config.openTemplate, seeded.templateFile || TEMPLATE_FILE).catch((error) => {
     ctx.logger?.warn?.(`[handoff-ui] openTemplate failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+
+  // The profile root may keep its own stock compaction row, whose automatic
+  // triggers hear every session and compact mid-turn before our idle gate.
+  // Silencing that instance while the plugin is enabled is what makes the
+  // takeover hold for sessions of every preset; the settings switch restores
+  // it live, and dispose (disable/uninstall) unwraps it.
+  ctx.inject(["compaction"], (scope) => {
+    try {
+      const service = scope.compaction ?? scope.root?.compaction;
+      const guard = installRootAutoGuard(service, () => readSettings()?.enabled !== false, (message) => trace(message));
+      if (guard.guarded) trace("root auto compaction guard installed");
+      scope.effect(() => guard.dispose, "auto-compaction root guard");
+    } catch (error) {
+      trace("root auto guard failed: " + (error instanceof Error ? error.message : String(error)));
+    }
   });
 
   ctx.inject(["connection"], (scope) => {
