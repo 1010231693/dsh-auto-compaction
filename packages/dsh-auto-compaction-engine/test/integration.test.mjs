@@ -454,6 +454,32 @@ test("manual /compact is recorded as a manual trigger", async () => {
   if (last.trigger !== "manual") throw new Error("trigger: " + last.trigger);
 });
 
+test("summary cap: settings override wins, row maxTokens next, 20000 last", async () => {
+  fs.rmSync(SETTINGS, { force: true });
+  const plugin = new HandoffCompaction(makeCtx({ totalTokens: 0 }), { maxTokens: 12288 });
+  if (plugin.summaryMaxTokens() !== 12288) throw new Error("row default: " + plugin.summaryMaxTokens());
+  const bare = new HandoffCompaction(makeCtx({ totalTokens: 0 }), { maxTokens: undefined });
+  if (bare.summaryMaxTokens() !== 20000) throw new Error("fallback: " + bare.summaryMaxTokens());
+  write(SETTINGS, JSON.stringify({ summaryMaxTokens: 16000 }));
+  await delay(5);
+  if (plugin.summaryMaxTokens() !== 16000) throw new Error("override: " + plugin.summaryMaxTokens());
+  write(SETTINGS, JSON.stringify({ summaryMaxTokens: 4000 }));
+  await delay(5);
+  if (plugin.summaryMaxTokens() !== 8192) throw new Error("floor clamp: " + plugin.summaryMaxTokens());
+  write(SETTINGS, JSON.stringify({ summaryMaxTokens: "abc" }));
+  await delay(5);
+  if (plugin.summaryMaxTokens() !== 12288) throw new Error("invalid override ignored: " + plugin.summaryMaxTokens());
+  write(SETTINGS, JSON.stringify({ summaryMaxTokens: 16000 }));
+  await delay(5);
+  const ctx = makeCtx({ totalTokens: 0 });
+  let seen;
+  ctx.llm.stream = async function* (options) { seen = options; yield { text: "## ok\n- done" }; };
+  const live = new HandoffCompaction(ctx, { maxTokens: 12288 });
+  await live.summarize({ messages: [{ role: "user", content: "OLD" }] }, makeAgent());
+  if (seen.maxTokens !== 16000) throw new Error("stream cap: " + seen.maxTokens);
+  fs.rmSync(SETTINGS, { force: true });
+});
+
 fs.rmSync(SETTINGS, { force: true });
 
 let failed = 0;

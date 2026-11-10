@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFile, spawn } from "node:child_process";
-import { mountTakeover, presetInventory } from "./takeover-mount.js";
+import { mountTakeover, presetInventory, readRowMaxTokens } from "./takeover-mount.js";
 
 export const name = "dsh-auto-compaction";
 export const inject = [];
@@ -88,6 +88,8 @@ function trace(message) {
 let lastOpenRequest = "";
 
 const DISPLAY_STYLES = new Set(["orbit", "strip", "ring", "topbar", "corner"]);
+const MIN_SUMMARY_TOKENS = 8192;
+const FALLBACK_SUMMARY_TOKENS = 20000;
 
 function normalizeDisplayStyle(value) {
   return typeof value === "string" && DISPLAY_STYLES.has(value) ? value : "orbit";
@@ -272,7 +274,8 @@ function sanitize(payload) {
   const presets = Array.isArray(payload?.presets)
     ? payload.presets.filter((v) => typeof v === "string" && v.trim().length > 0)
     : String(payload?.presets ?? "").split(/[,，s]+/).filter((v) => v.trim().length > 0);
-  return {
+  const cap = Number(payload?.summaryMaxTokens);
+  const next = {
     enabled: payload?.enabled !== false,
     thresholdRatio: ratio / 100,
     scope: payload?.scope === "preset" ? "preset" : "global",
@@ -280,6 +283,10 @@ function sanitize(payload) {
     templateFile: String(payload?.templateFile ?? "").trim(),
     displayStyle: normalizeDisplayStyle(payload?.displayStyle),
   };
+  // Absent/blank means "follow the row default", so the key is dropped rather
+  // than pinning a number that would outlive a future row change.
+  if (Number.isInteger(cap) && cap >= MIN_SUMMARY_TOKENS) next.summaryMaxTokens = cap;
+  return next;
 }
 
 export function apply(ctx, config = {}) {
@@ -336,6 +343,7 @@ export function apply(ctx, config = {}) {
                 enabled: stored.enabled !== false,
                 displayStyle: normalizeDisplayStyle(stored.displayStyle),
                 defaultTemplate: TEMPLATE_FILE,
+                defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS,
               },
             };
           }
@@ -346,7 +354,7 @@ export function apply(ctx, config = {}) {
             // No rewriting of preset files: the engine applies the switch and
             // the scope per preset at decision time, so a save is live at the
             // next idle check and uninstalling still leaves nothing behind.
-            return { ok: true, value: { ...next, defaultTemplate: TEMPLATE_FILE } };
+            return { ok: true, value: { ...next, defaultTemplate: TEMPLATE_FILE, defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS } };
           }
           if (endpoint === "scope") {
             const stored = readSettings() ?? seeded;

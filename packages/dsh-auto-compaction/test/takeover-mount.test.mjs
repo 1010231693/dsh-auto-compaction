@@ -258,6 +258,25 @@ test("mounting keeps the bundle entry last without touching other fields", async
   assert.equal(after.dsh.profile.bundles.at(-1), "dsh-auto-compaction");
 });
 
+test("readRowMaxTokens reads the cap from the shipped block only", async () => {
+  const { readRowMaxTokens } = await import("../lib/takeover-mount.js");
+  const { BLOCK_MARKERS } = await import("../../dsh-auto-compaction-engine/lib/takeover-rows.js");
+  writeFileSync(PATCH, SHIPPED + [
+    BLOCK_MARKERS.BEGIN,
+    "- id: preset-standard",
+    "  config:",
+    "    plugins:",
+    "      - id: compaction-basic",
+    "        name: dsh-auto-compaction-engine",
+    "        config: { thresholdRatio: 0.9, maxTokens: 12288 }",
+    BLOCK_MARKERS.END,
+    "",
+  ].join("\n"), "utf8");
+  assert.equal(await readRowMaxTokens(), 12288);
+  writeFileSync(PATCH, SHIPPED, "utf8");
+  assert.equal(await readRowMaxTokens(), undefined);
+});
+
 let failed = 0;
 for (const { name, fn } of cases) {
   try { await fn(); console.log(`ok   ${name}`); }

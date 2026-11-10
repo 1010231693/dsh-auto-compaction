@@ -309,7 +309,7 @@ window.__ModuleLoader__.load({
         title = nodes > 0
           ? "已压缩 " + fmt(nodes) + " 条历史记录（约 " + fmt(tokens) + " tokens）"
           : (status.note === "no compactable range" ? "没有需要压缩的历史" : "压缩完成");
-        sub = "旧消息仍可用 rewind 回滚";
+        sub = "旧消息仍可用回滚功能恢复";
       } else {
         title = staleRunning ? "压缩可能已中断（超时）· 历史未改动" : "交接文档生成失败 · 历史未改动";
         if (staleRunning) {
@@ -693,19 +693,19 @@ window.__ModuleLoader__.load({
     /* ---------- compaction timeline ---------- */
 
     var TIMELINE_STYLE_ID = "dsh-auto-compaction-timeline-style";
-    var TL_ACCENT_DARK = "#8fb6d4";
-    var TL_ACCENT_LIGHT = "#4a7391";
+    var TL_PALETTE_DARK = { accent: "#f14b0b", bead: "#a84515", time: "#f2c8b8" };
+    var TL_PALETTE_LIGHT = { accent: "#c33f08", bead: "#b0501f", time: "#7a2d0c" };
 
-    /** Cool steel on dark themes, a deeper steel when the app is light. */
+    /** Burnt orange on dark themes, a deeper ember when the app is light. */
     function accentColor() {
       try {
         var matches = (getComputedStyle(document.body).backgroundColor || "").match(/\d+/g);
         if (matches !== null && matches.length >= 3) {
           var lum = 0.299 * Number(matches[0]) + 0.587 * Number(matches[1]) + 0.114 * Number(matches[2]);
-          if (lum > 150) return TL_ACCENT_LIGHT;
+          if (lum > 150) return TL_PALETTE_LIGHT;
         }
-      } catch (error) { /* keep the dark accent */ }
-      return TL_ACCENT_DARK;
+      } catch (error) { /* keep the dark palette */ }
+      return TL_PALETTE_DARK;
     }
 
     function ensureTimelineStyles() {
@@ -714,38 +714,31 @@ window.__ModuleLoader__.load({
         var style = document.createElement("style");
         style.id = TIMELINE_STYLE_ID;
         style.textContent = [
-          ".dsh-tl{position:fixed;z-index:6;display:flex;flex-direction:column;min-height:0;pointer-events:auto;",
+          ".dsh-tl{position:fixed;z-index:6;pointer-events:auto;",
           "transform:translateY(-50%);",
           "font-family:var(--dsh-font-sans,system-ui,'Segoe UI','Microsoft YaHei',sans-serif)}",
-          ".dsh-tl-head{display:flex;align-items:baseline;justify-content:space-between;padding:0 6px 10px;font-size:11px}",
-          ".dsh-tl-head b{font-weight:600;color:var(--dsw-alias-label-primary,#dfe3e6)}",
-          ".dsh-tl-head span{font-family:ui-monospace,Consolas,monospace;font-size:10px;color:var(--dsw-alias-label-secondary,#88939c)}",
-          ".dsh-tl-list{position:relative;flex:1;min-height:0;overflow:auto;padding:14px 4px 16px;scrollbar-width:thin}",
-          ".dsh-tl-list::before{content:'';position:absolute;left:78px;top:16px;bottom:16px;width:1px;",
-          "background:linear-gradient(180deg,transparent,var(--dsw-alias-border-l2,#2c3a45),transparent)}",
-          ".dsh-tl-ev{display:grid;grid-template-columns:64px 24px minmax(0,1fr);gap:4px;align-items:center;width:100%;",
-          "background:none;border:0;color:inherit;cursor:pointer;padding:14px 4px;margin-bottom:30px;border-radius:8px;text-align:left}",
-          ".dsh-tl-ev:last-child{margin-bottom:0}",
-          ".dsh-tl-ev:hover{background:rgba(143,182,212,.08)}",
-          ".dsh-tl-time{font-family:ui-monospace,Consolas,monospace;font-size:11px;text-align:right;",
-          "color:var(--dsw-alias-label-primary,#d3e0e9);font-variant-numeric:tabular-nums}",
-          ".dsh-tl-dot{display:block;width:8px;height:8px;margin:0 auto;border-radius:50%;",
-          "background:var(--dsw-alias-bg-primary,#0e1114);border:1.5px solid var(--dsh-tl-accent,#8fb6d4);opacity:.75;",
-          "transition:transform .12s,opacity .12s}",
-          ".dsh-tl-ev:hover .dsh-tl-dot{opacity:1;transform:scale(1.15)}",
-          ".dsh-tl-meta{font-size:10.5px;line-height:1.5;color:var(--dsw-alias-label-secondary,#88939c);",
-          "font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-          ".dsh-tl-meta b{font-weight:500;color:var(--dsw-alias-label-primary,#c9d6e0)}",
-          // Compact gutter: stack time over metrics, keep the rail at the left.
-          ".dsh-tl--compact .dsh-tl-ev{grid-template-columns:20px minmax(0,1fr);row-gap:1px}",
-          ".dsh-tl--compact .dsh-tl-list::before{left:14px}",
-          ".dsh-tl--compact .dsh-tl-time{grid-column:2;grid-row:1;text-align:left}",
-          ".dsh-tl--compact .dsh-tl-ev>span:nth-child(2){grid-column:1;grid-row:1/3}",
-          ".dsh-tl--compact .dsh-tl-meta{grid-column:2;grid-row:2}",
+          ".dsh-tl-list{position:relative;width:100%}",
+          ".dsh-tl-line{position:absolute;left:8px;width:1px;opacity:.45;",
+          "background:linear-gradient(180deg,transparent,var(--dsh-tl-accent,#f14b0b) 12%,var(--dsh-tl-accent,#f14b0b) 88%,transparent)}",
+          ".dsh-tl-ev{position:absolute;left:0;max-width:100%;display:flex;align-items:center;",
+          "background:none;border:0;padding:0;margin:0;color:inherit;cursor:pointer;text-align:left;border-radius:4px}",
+          ".dsh-tl-ev:hover{background:rgba(241,75,11,.07)}",
+          ".dsh-tl-dot{flex:none;border-radius:50%;background:var(--dsh-tl-bead,#a84515);",
+          "transition:background .12s,box-shadow .12s}",
+          ".dsh-tl-ev:hover .dsh-tl-dot{background:var(--dsh-tl-accent,#f14b0b)}",
+          ".dsh-tl-ev.on .dsh-tl-dot{background:var(--dsh-tl-accent,#f14b0b);",
+          "box-shadow:0 0 0 3px rgba(241,75,11,.2),0 0 12px rgba(241,75,11,.5)}",
+          ".dsh-tl-meta{margin-left:14px;min-width:0;font-family:ui-monospace,Consolas,monospace;font-size:10.5px;",
+          "color:var(--dsw-alias-label-secondary,#88939c);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;",
+          "font-variant-numeric:tabular-nums}",
+          ".dsh-tl-meta b{font-weight:500;color:var(--dsh-tl-time,#f2c8b8)}",
+          ".dsh-tl-ev:hover .dsh-tl-meta{color:var(--dsw-alias-label-primary,#c9d6e0)}",
+          // Narrow gutter: keep the bead chain and the clock, drop the metrics.
+          ".dsh-tl--compact .dsh-tl-metrics{display:none}",
           ".dsh-tl-backdrop{position:fixed;inset:0;z-index:200;background:rgba(6,9,11,.66);backdrop-filter:blur(5px);",
           "display:flex;align-items:center;justify-content:center;padding:24px}",
           ".dsh-tl-modal{width:min(1000px,92vw);height:min(660px,84vh);display:flex;flex-direction:column;overflow:hidden;",
-          "background:var(--dsw-alias-bg-layer-3,#161d24);border:1px solid rgba(143,182,212,.22);border-radius:14px;",
+          "background:var(--dsw-alias-bg-layer-3,#161d24);border:1px solid rgba(241,75,11,.25);border-radius:14px;",
           "box-shadow:0 40px 100px rgba(0,0,0,.6)}",
           ".dsh-tl-mh{display:flex;align-items:center;gap:12px;padding:14px 20px;",
           "border-bottom:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.09))}",
@@ -824,7 +817,7 @@ window.__ModuleLoader__.load({
      * the gutter is too narrow it hides rather than covering the conversation.
      */
     function timelinePlacement() {
-      var out = { left: 12, top: 96, width: 248, height: 0, visible: false, compact: false };
+      var out = { left: 12, top: 96, width: 248, height: 0, regionHeight: 0, visible: false, compact: false };
       try {
         var content = document.querySelector("[data-conversation-content]");
         var cr = content && content.getBoundingClientRect();
@@ -865,6 +858,9 @@ window.__ModuleLoader__.load({
         // only caps its height when many entries accumulate.
         out.top = Math.round(cr.top + cr.height / 2);
         out.height = Math.round(cr.height) - 16;
+        // The chain lives in a fixed centred band; spacing adapts inside it so
+        // a long history never pushes entries past the conversation edges.
+        out.regionHeight = Math.round(cr.height * 0.62);
         var width = Math.min(248, columnLeft - contentLeft - 24);
         var left = columnLeft - width - 12;
         if (left < contentLeft + 8) {
@@ -930,11 +926,24 @@ window.__ModuleLoader__.load({
 
       if (events.length === 0 || !place.visible) return null;
 
-      var accent = accentColor();
+      var palette = accentColor();
+      var accent = palette.accent;
       var active = openIndex >= 0 && openIndex < events.length ? events[openIndex] : null;
       // Same direction as the conversation: oldest at the top, newest at the
       // bottom, so a new compaction lands where the eye already is.
       var ordered = events;
+      // Bead chain inside a fixed centred band: the pitch shrinks as events
+      // accumulate; below the label floor only beads remain and their diameter
+      // yields to the pitch so neighbours never touch.
+      var regionH = Math.max(40, place.regionHeight);
+      var n = ordered.length;
+      var eh = 16;
+      var pitch = n > 1 ? Math.min(34, (regionH - eh) / (n - 1)) : 0;
+      if (n > 1 && pitch < 22) { eh = 14; pitch = Math.min(34, (regionH - eh) / (n - 1)); }
+      var labels = n === 1 || pitch >= 18;
+      if (!labels) { eh = 12; pitch = n > 1 ? Math.min(34, (regionH - eh) / (n - 1)) : 0; }
+      var total = n > 1 ? (n - 1) * pitch + eh : eh;
+      var off = Math.max(0, (regionH - total) / 2);
 
       var panel = h("div", {
         className: "dsh-tl" + (place.compact ? " dsh-tl--compact" : ""),
@@ -943,27 +952,33 @@ window.__ModuleLoader__.load({
           left: place.left + "px",
           top: place.top + "px",
           width: place.width + "px",
-          maxHeight: place.height + "px",
-          "--dsh-tl-accent": accent,
+          "--dsh-tl-accent": palette.accent,
+          "--dsh-tl-bead": palette.bead,
+          "--dsh-tl-time": palette.time,
         },
       },
-        h("div", { className: "dsh-tl-head" }, h("b", null, "压缩事件")),
-        h("div", { className: "dsh-tl-list" },
-          ordered.map(function (event) {
-            var realIndex = events.indexOf(event);
+        h("div", { className: "dsh-tl-list", style: { height: regionH + "px" } },
+          h("i", {
+            className: "dsh-tl-line",
+            "aria-hidden": true,
+            style: { top: (off + eh / 2) + "px", height: Math.max(0, (n - 1) * pitch) + "px" },
+          }),
+          ordered.map(function (event, i) {
+            var chars = Number(event.cjk) || Number(event.summaryChars) || 0;
+            var bead = Math.max(4, Math.min(6 + Math.round(chars / 220), labels ? 12 : Math.max(4, Math.floor(pitch) - 2)));
             return h("button", {
-              key: String(event.startedAt || realIndex),
+              key: String(event.startedAt || i),
               type: "button",
-              className: "dsh-tl-ev",
-              title: "查看这次压缩的详情",
-              onClick: function () { setOpenIndex(realIndex); },
+              className: "dsh-tl-ev" + (i === n - 1 ? " on" : ""),
+              title: clockOf(event.startedAt) + " · " + durationText(event.durationMs) + " · " + fmt(chars) + " 字 · 查看详情",
+              onClick: function () { setOpenIndex(i); },
+              style: { top: (off + i * pitch) + "px", height: eh + "px" },
             },
-              h("span", { className: "dsh-tl-time" }, clockOf(event.startedAt)),
-              h("span", null, h("span", { className: "dsh-tl-dot" })),
-              h("span", { className: "dsh-tl-meta" },
-                durationText(event.durationMs) + " · ",
-                h("b", null, fmt(Number(event.cjk) || 0) + " 字")
-              )
+              h("span", { className: "dsh-tl-dot", style: { width: bead + "px", height: bead + "px", marginLeft: ((17 - bead) / 2) + "px" } }),
+              labels ? h("span", { className: "dsh-tl-meta" },
+                h("b", null, clockOf(event.startedAt)),
+                h("span", { className: "dsh-tl-metrics" }, " · " + durationText(event.durationMs) + " · " + fmt(chars) + " 字")
+              ) : null
             );
           })
         )
@@ -983,7 +998,7 @@ window.__ModuleLoader__.load({
         var attempts = Array.isArray(active.attempts) ? active.attempts : [];
         var ring = h("figure", { className: "dsh-tl-ring" },
           h("svg", { viewBox: "0 0 " + ringSize + " " + ringSize, width: ringSize, height: ringSize, "aria-hidden": "true" },
-            h("circle", { cx: ringCenter, cy: ringCenter, r: ringR, fill: "none", stroke: "rgba(143,182,212,.18)", strokeWidth: 7 }),
+            h("circle", { cx: ringCenter, cy: ringCenter, r: ringR, fill: "none", stroke: "rgba(241,75,11,.18)", strokeWidth: 7 }),
             h("circle", {
               cx: ringCenter, cy: ringCenter, r: ringR, fill: "none", stroke: accent, strokeWidth: 7, strokeLinecap: "round",
               strokeDasharray: (ringC * filled / 100).toFixed(1) + " " + ringC.toFixed(1),
@@ -1061,6 +1076,8 @@ window.__ModuleLoader__.load({
       var scope = scopeState[0], setScope = scopeState[1];
       var tokenState = React.useState(0);
       var token = tokenState[0], setToken = tokenState[1];
+      var capState = React.useState(null);
+      var capDraft = capState[0], setCapDraft = capState[1];
       ensureStatusStyles();
 
       // Which presets exist and which of them this plugin's patch reaches is
@@ -1107,6 +1124,18 @@ window.__ModuleLoader__.load({
       var template = base.templateFile || "";
       var defaultTemplate = base.defaultTemplate || DEFAULT_TEMPLATE;
       var themeStyle = normalizeDisplayStyle(base.displayStyle);
+      var capDefaultRaw = Number(base.defaultSummaryMaxTokens);
+      var capDefault = Number.isFinite(capDefaultRaw) && capDefaultRaw >= 1 ? Math.floor(capDefaultRaw) : 20000;
+      var capText = capDraft === null ? (base.summaryMaxTokens !== undefined ? String(base.summaryMaxTokens) : String(capDefault)) : capDraft;
+      var capTrim = capText.trim();
+      var capParsed = capTrim === "" ? undefined : (/^\d+$/.test(capTrim) ? Number(capTrim) : NaN);
+      var capError = capTrim === "" ? ""
+        : !Number.isInteger(capParsed) ? "请输入整数 tokens。"
+          : capParsed < 8192 ? "最低 8,192 tokens：再小摘要装不下模板小节，会反复触发续写。" : "";
+      var capValue = capError !== "" || capParsed === undefined || capParsed === capDefault ? undefined : capParsed;
+      var capMessage = capError !== "" ? capError
+        : capTrim === "" ? "留空 = 恢复默认 " + fmt(capDefault) + " tokens。"
+          : "下一次压缩生效：单次摘要上限 " + fmt(capParsed) + " tokens。";
 
       // Detection only: who compacts is decided by the preset slot (read from
       // disk) times the 启用插件 switch. This row never changes either of them.
@@ -1123,7 +1152,7 @@ window.__ModuleLoader__.load({
             tone: "err",
             text: scope.loading ? "读取中…" : "读不到生效情况",
             sub: scope.loading
-              ? "正在向 DSH 读取预设名单与本插件的接管行。"
+              ? "正在向 DSH 读取预设名单与插件状态。"
               : "读不到预设名单：" + (scope.error || "未知原因") + "。",
             rows: [], retry: true,
           };
@@ -1146,7 +1175,7 @@ window.__ModuleLoader__.load({
         var effective = Number(st.effective) || 0;
         var globalSaved = st.scope !== "preset";
         var scopeLead = globalSaved ? "全局生效：" : "按预设生效：";
-        var mechanism = "接管行写在本插件包内的补丁里，卸载插件时随包一起消失，你的预设文件不会被改动。";
+        var mechanism = "插件对压缩的接入在安装时自动生效、卸载时自动撤销，不会改动你现有的任何配置文件。";
 
         if (total === 0) {
           return {
@@ -1157,14 +1186,14 @@ window.__ModuleLoader__.load({
         if (covered === 0) {
           return {
             tone: "native", text: "DSH 原生压缩", rows: rows, retry: true,
-            sub: "本插件的接管行还没覆盖到任何预设" + (st.reason ? "（" + st.reason + "）" : "")
-              + "，压缩目前由 DSH 自己完成。" + mechanism + " 新生成或新装的预设需要重启 DSH 重新生成接管行。",
+            sub: "本插件还没接入任何预设" + (st.reason ? "（" + st.reason + "）" : "")
+              + "，压缩目前由 DSH 自己完成。" + mechanism + " 新生成或新安装的预设需要重启一次 DSH 才能接入。",
           };
         }
         if (effective === 0 && !enabled) {
           return {
             tone: "native", text: "DSH 原生压缩（插件已停用）", rows: rows, retry: false,
-            sub: "「启用插件」已关闭：" + takenNames.length + "/" + total + " 个预设虽然被接管行覆盖，但插件把压缩交回 DSH 原生实现。打开开关即恢复，不需要重启。",
+            sub: "「启用插件」已关闭：" + takenNames.length + "/" + total + " 个预设虽然已由插件接入，但插件把压缩交回 DSH 自带实现。打开开关即恢复，不需要重启。",
           };
         }
         if (effective === 0) {
@@ -1206,7 +1235,8 @@ window.__ModuleLoader__.load({
         settings.scope !== base.scope ||
         JSON.stringify(settings.presets || []) !== JSON.stringify(presets) ||
         (settings.templateFile || "") !== template ||
-        normalizeDisplayStyle(settings.displayStyle) !== themeStyle;
+        normalizeDisplayStyle(settings.displayStyle) !== themeStyle ||
+        (settings.summaryMaxTokens ?? undefined) !== capValue;
 
       // The detection row reports what is on disk, so every unsaved choice that
       // would change that report has to be named — otherwise it looks ignored.
@@ -1219,7 +1249,7 @@ window.__ModuleLoader__.load({
       if (scopeIsPending) pendingParts.push("生效范围改成「" + (scopePreset ? "按预设生效" : "全局生效") + "」");
       if (presetsIsPending) pendingParts.push("勾选的预设改成" + (presets.length ? presets.map(presetLabel).join("、") : "（都不勾）"));
       var pendingNote = pendingParts.length
-        ? "还没保存：" + pendingParts.join("；") + "。保存后开关与勾选在下一次判定就生效，不需要重启；只有接管行本身要覆盖新的预设时才需要重启 DSH 重新生成。"
+        ? "还没保存：" + pendingParts.join("；") + "。保存后开关与勾选在下一次判定就生效，不需要重启；只有新预设需要接入插件时才需要重启一次 DSH。"
         : "";
 
       function patch(next) { setDraft(Object.assign({}, base, next)); setStatus({ loading: false, error: "", saving: false, saved: false }); }
@@ -1236,8 +1266,10 @@ window.__ModuleLoader__.load({
           presets: presets,
           templateFile: template,
           displayStyle: themeStyle,
+          summaryMaxTokens: capValue,
         }).then(function (value) {
           setSettings(value); setDraft(value);
+          setCapDraft(null);
           publishDisplayStyle(value && value.displayStyle);
           setStatus({ loading: false, error: "", saving: false, saved: true });
           setToken(token + 1);
@@ -1246,7 +1278,7 @@ window.__ModuleLoader__.load({
         });
       }
 
-      function discard() { setDraft(settings); setStatus({ loading: false, error: "", saving: false, saved: false }); }
+      function discard() { setDraft(settings); setCapDraft(null); setStatus({ loading: false, error: "", saving: false, saved: false }); }
       function open(kind) {
         call(connection, "open", { kind: kind, path: template }).then(function () {
           setStatus({ loading: false, error: "", saving: false, saved: false, note: "已打开" });
@@ -1288,7 +1320,7 @@ window.__ModuleLoader__.load({
         h("div", { style: rowStyle },
           h("div", null,
             h("div", { style: labelStyle }, "生效范围"),
-            h("div", { style: subStyle }, scopePreset ? "只有勾选的预设由插件压缩，其余预设保持 DSH 原生行为；名单来自 DSH 的预设注册表" : "所有能被本插件接管的预设都由插件压缩，共用这份设置")
+            h("div", { style: subStyle }, scopePreset ? "只有勾选的预设由插件压缩，其余预设保持 DSH 自带行为；预设名单读自 DSH 本身" : "所有能被本插件接入的预设都由插件压缩，共用这份设置")
           ),
           h("div", { style: { display: "inline-flex", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
             seg(!scopePreset, "全局生效", function () { patch({ scope: "global" }); }),
@@ -1299,7 +1331,7 @@ window.__ModuleLoader__.load({
           takeable.length === 0
             ? h("span", { style: subStyle }, scope.loading
               ? "正在向 DSH 读取预设名单…"
-              : "本插件的接管行还没覆盖到任何预设。重启 DSH 会重新生成接管行；仍未出现预设名单说明 DSH 没有返回预设。")
+              : "本插件还没接入任何预设。重启一次 DSH 会重新接入；仍未出现预设名单说明 DSH 没有返回预设。")
             : takeable.map(function (p) {
                 var on = presets.indexOf(p.id) >= 0;
                 return h("button", {
@@ -1363,7 +1395,7 @@ window.__ModuleLoader__.load({
         h("div", { style: rowStyle },
           h("div", null,
             h("div", { style: labelStyle }, "压缩触发点"),
-            h("div", { style: subStyle }, "上下文用到「可用输入预算」的这个比例后，等当前回合结束再压缩")
+            h("div", { style: subStyle }, "上下文占用达到这个比例后，等当前这轮回答结束再压缩")
           ),
           h("div", { style: { display: "flex", alignItems: "center", gap: 12 } },
             h("input", {
@@ -1387,10 +1419,28 @@ window.__ModuleLoader__.load({
         ),
         h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "10px 0", borderBottom: "1px solid " + C.line } },
           h("div", { style: subStyle },
-            "示例：窗口 250K、输出预留 20K、headroom 10K → 预算 " + fmt(budget) + "；" + ratio + "% ≈ " + fmt(eff) + " tokens" +
+            "示例：窗口 250K、主回复预留 20K、安全余量 10K → 可用预算 " + fmt(budget) + "；" + ratio + "% ≈ " + fmt(eff) + " tokens" +
             (capped ? "（已封顶，再往上不会更晚触发）" : "（距输入上限余 " + fmt(budget - eff) + "）")
           ),
           h("div", { style: { fontSize: 20, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" } }, ratio + "%")
+        ),
+
+        h("div", { style: { padding: "14px 0", borderBottom: "1px solid " + C.line } },
+          h("div", { style: labelStyle }, "摘要上限"),
+          h("div", { style: Object.assign({}, subStyle, { marginTop: 6, marginBottom: 10 }) },
+            "单次摘要生成的输出上限，默认 " + fmt(capDefault) + " tokens；最低 8,192，留空恢复默认。写到上限后会自动续写或重写，各自独立预算。"),
+          h("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+            h("div", { style: { display: "flex", alignItems: "center", border: "1px solid " + (capError ? "#e5534b" : C.line), borderRadius: 8, background: "#151619", height: 34, overflow: "hidden", width: 190 } },
+              h("input", {
+                type: "text", inputMode: "numeric", value: capText, "aria-label": "摘要上限 tokens",
+                onChange: function (e) { setCapDraft(e.target.value); },
+                style: { flex: 1, minWidth: 0, border: 0, background: "transparent", color: C.text, padding: "0 10px", fontSize: 13.5, outline: "none", fontFamily: "ui-monospace,Consolas,monospace" },
+              }),
+              h("span", { style: { color: C.muted, fontSize: 12, padding: "0 9px 0 2px" } }, "tokens")
+            ),
+            h("button", { type: "button", style: btnBase, onClick: function () { setCapDraft(String(capDefault)); } }, "恢复默认")
+          ),
+          h("div", { style: { marginTop: 8, fontSize: 11.5, lineHeight: 1.6, color: capError ? "#e5534b" : capTrim === "" ? C.muted : C.ok } }, capMessage)
         ),
 
         h("div", { style: { paddingTop: 14 } },
@@ -1413,15 +1463,15 @@ window.__ModuleLoader__.load({
           h("div", { style: { fontSize: 12.5, fontWeight: 600, color: C.text, marginBottom: 8 } }, "它是怎么压缩的"),
           h("ol", { style: { margin: 0, paddingLeft: 18, color: C.muted, fontSize: 12.5, lineHeight: 1.85 } },
             h("li", null, "到点后不立即动手，等 agent 结束当前回合。"),
-            h("li", null, "用会话自己的前缀（命中缓存）让模型按模板写交接文档，不额外全量 prefill。"),
+            h("li", null, "写交接文档时会复用会话已算过的上下文（命中缓存），不重新全量计算历史。"),
             h("li", null, "只替换最旧的这一段历史，换成一条交接文档；最近约 16% 窗口的原文逐字留着，切点也不会把工具调用和它的结果拆开。"),
-            h("li", null, "下一轮 = 系统提示词 + 工具定义 + 这条交接文档 + 那段逐字保留的最近消息；旧消息仍在会话日志里，rewind 可回滚。")
+            h("li", null, "下一轮 = 系统提示词 + 工具定义 + 这条交接文档 + 那段逐字保留的最近消息；旧消息仍在会话日志里，可用回滚功能恢复。")
           ),
           h("div", { style: { marginTop: 8, fontSize: 11.5, color: C.faint } }, "手动压缩：会话里发送 /compact 可随时折叠一次，不受这个比例限制。")
         ),
 
         h("div", { style: { display: "flex", alignItems: "center", gap: 10, marginTop: 14 } },
-          h("button", { type: "button", style: dirty ? btnPrimary : Object.assign({}, btnBase, { opacity: 0.55 }), onClick: dirty ? save : undefined }, status.saving ? "保存中…" : "保存"),
+          h("button", { type: "button", style: dirty && capError === "" ? btnPrimary : Object.assign({}, btnBase, { opacity: 0.55 }), onClick: dirty && capError === "" ? save : undefined }, status.saving ? "保存中…" : "保存"),
           h("button", { type: "button", style: btnBase, onClick: discard }, "撤销改动"),
           status.note ? h("span", { style: { fontSize: 12, color: C.ok } }, status.note) : status.saved ? h("span", { style: { fontSize: 12, color: C.ok } }, "已保存，下次判定生效") : null,
           status.error ? h("span", { style: { fontSize: 12, color: "#e5534b" } }, status.error) : null

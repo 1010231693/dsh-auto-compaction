@@ -249,6 +249,25 @@ export async function mountTakeover(ctx) {
   return { ok: true, file, taken, skipped, mounted, broken, reason: notes.join(" | ") };
 }
 
+/** The summary cap the shipped takeover rows carry; the settings page default. */
+export async function readRowMaxTokens() {
+  const generator = await loadGenerator();
+  if (generator === undefined) return undefined;
+  let text = "";
+  try {
+    text = readFileSync(patchFile(), "utf8");
+  } catch {
+    return undefined;
+  }
+  const { BEGIN, END } = generator.BLOCK_MARKERS;
+  const begin = text.indexOf(BEGIN);
+  const end = text.indexOf(END);
+  if (begin < 0 || end < 0 || end < begin) return undefined;
+  // Only the engine row inside our own generated block carries maxTokens.
+  const match = text.slice(begin + BEGIN.length, end).match(/maxTokens:\s*(\d+)/);
+  return match === null ? undefined : Number(match[1]);
+}
+
 /** Which presets the shipped block currently covers. */
 export async function readTakenPresets() {
   const generator = await loadGenerator();

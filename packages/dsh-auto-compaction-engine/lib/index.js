@@ -38,6 +38,7 @@ import {
 
 const LOG = "[handoff]";
 const MAX_SUMMARY_ATTEMPTS = 3;
+const MIN_SUMMARY_TOKENS = 8_192;
 // The timeline shows the handoff document; a pathological one must not bloat
 // the append-only history. 20k chars is ~7k Chinese tokens.
 const MAX_STORED_SUMMARY_CHARS = 20_000;
@@ -255,6 +256,18 @@ export default class HandoffCompaction extends BasicCompactionEngine {
 
   describeThreshold() {
     return `${Math.round((this.config.thresholdRatio ?? 0.9) * 100)}%`;
+  }
+
+  /**
+   * Per-summary output cap: the settings override wins, then the row's
+   * maxTokens, then 20000. A hand-edited sidecar below the floor is clamped
+   * instead of trusted; each retry call gets this budget independently.
+   */
+  summaryMaxTokens() {
+    const raw = Number(readSettings()?.summaryMaxTokens);
+    if (Number.isFinite(raw) && raw >= 1) return Math.max(MIN_SUMMARY_TOKENS, Math.floor(raw));
+    const configured = Number(this.config.maxTokens);
+    return Number.isFinite(configured) && configured >= 1 ? Math.floor(configured) : 20_000;
   }
 
   /**
@@ -631,6 +644,8 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       ? resolved.text
       : BUILTIN_INSTRUCTION;
     this.log(`template: ${resolved.source}${resolved.text === undefined ? " (fallback)" : ""}`);
+    const maxTokens = this.summaryMaxTokens();
+    this.log(`summary cap ${maxTokens} tokens`);
 
     const expected = expectedSections(instruction);
     const baseMessages = [
@@ -642,7 +657,7 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       model: target.model,
       toolHistory: agent.session.toolHistory(),
       ...(input.tools === undefined ? {} : { tools: [...input.tools] }),
-      maxTokens: this.config.maxTokens,
+      maxTokens,
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       sessionId: agent.session.id,
       purpose: "compaction",
@@ -688,7 +703,7 @@ export default class HandoffCompaction extends BasicCompactionEngine {
             ...baseMessages,
             Object.freeze({
               role: "user",
-              content: [{ type: "text", text: rewriteInstruction(validation, this.config.maxTokens) }],
+              content: [{ type: "text", text: rewriteInstruction(validation, maxTokens) }],
             }),
           ];
 
@@ -772,7 +787,7 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       llmStreamCall: true,
       provider: target.provider,
       model: target.model,
-      maxTokens: this.config.maxTokens,
+      maxTokens,
       ...(usage === undefined ? {} : { usage }),
     };
   }
