@@ -19,6 +19,7 @@ import { dirname, join } from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { mountTakeover, presetInventory, readRowMaxTokens } from "./takeover-mount.js";
 import { installRootAutoGuard } from "./root-auto-guard.js";
+import { normalizeTimelinePosition } from "./timeline-prefs.js";
 
 export const name = "dsh-auto-compaction";
 export const inject = [];
@@ -31,6 +32,8 @@ export const Config = z.object({
   templateFile: z.string().default(""),
   openTemplate: z.string().default(""),
   displayStyle: z.string().default("orbit"),
+  timelineEnabled: z.boolean().default(true),
+  timelinePosition: z.string().default("chat"),
 });
 
 const DIR = join(homedir(), ".dsh-handoff-compaction");
@@ -109,6 +112,8 @@ function normalize(config) {
       .filter((part) => part.length > 0),
     templateFile: String(config.templateFile ?? "").trim(),
     displayStyle: normalizeDisplayStyle(config.displayStyle),
+    timelineEnabled: config.timelineEnabled !== false,
+    timelinePosition: normalizeTimelinePosition(config.timelinePosition),
   };
 }
 
@@ -283,6 +288,8 @@ function sanitize(payload) {
     presets,
     templateFile: String(payload?.templateFile ?? "").trim(),
     displayStyle: normalizeDisplayStyle(payload?.displayStyle),
+    timelineEnabled: payload?.timelineEnabled !== false,
+    timelinePosition: normalizeTimelinePosition(payload?.timelinePosition),
   };
   // Absent/blank means "follow the row default", so the key is dropped rather
   // than pinning a number that would outlive a future row change.
@@ -359,6 +366,8 @@ export function apply(ctx, config = {}) {
                 ...stored,
                 enabled: stored.enabled !== false,
                 displayStyle: normalizeDisplayStyle(stored.displayStyle),
+                timelineEnabled: stored.timelineEnabled !== false,
+                timelinePosition: normalizeTimelinePosition(stored.timelinePosition),
                 defaultTemplate: TEMPLATE_FILE,
                 defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS,
               },

@@ -85,6 +85,39 @@ window.__ModuleLoader__.load({
       }).catch(function () { /* keep the default orbit */ });
     }
 
+    /* Timeline display prefs mirror lib/timeline-prefs.js; the bundle cannot
+     * import local modules, so the normalization is inlined (same split as
+     * displayStyle). UI-only: the engine records history regardless. */
+    var timelinePrefs = { enabled: true, position: "chat" };
+    var timelineListeners = [];
+    function normalizeTimelinePosition(value) {
+      return value === "tab" ? "tab" : "chat";
+    }
+    function publishTimelinePrefs(settings) {
+      var next = {
+        enabled: !settings || settings.timelineEnabled !== false,
+        position: normalizeTimelinePosition(settings && settings.timelinePosition),
+      };
+      if (next.enabled === timelinePrefs.enabled && next.position === timelinePrefs.position) return;
+      timelinePrefs = next;
+      for (var i = 0; i < timelineListeners.length; i += 1) {
+        try { timelineListeners[i](timelinePrefs); } catch (error) { /* a bad subscriber must not break the dock */ }
+      }
+    }
+    function subscribeTimelinePrefs(listener) {
+      timelineListeners.push(listener);
+      return function unsubscribe() {
+        var index = timelineListeners.indexOf(listener);
+        if (index >= 0) timelineListeners.splice(index, 1);
+      };
+    }
+    function loadTimelinePrefs(connection) {
+      if (!connection || !connection.rpc || typeof connection.rpc.call !== "function") return;
+      call(connection, "get").then(function (value) {
+        if (value && typeof value === "object") publishTimelinePrefs(value);
+      }).catch(function () { /* keep the current prefs */ });
+    }
+
     function clampPercent(raw) {
       var n = Number(raw);
       if (!Number.isFinite(n)) return 0;
@@ -910,6 +943,16 @@ window.__ModuleLoader__.load({
       var place = placeState[0], setPlace = placeState[1];
       var openState = React.useState(-1);
       var openIndex = openState[0], setOpenIndex = openState[1];
+      var prefsState = React.useState(timelinePrefs);
+      var prefs = prefsState[0], setPrefs = prefsState[1];
+
+      React.useEffect(function () {
+        return subscribeTimelinePrefs(setPrefs);
+      }, []);
+
+      React.useEffect(function () {
+        loadTimelinePrefs(connection);
+      }, [connection]);
 
       React.useEffect(function () {
         var pending = [];
@@ -970,7 +1013,7 @@ window.__ModuleLoader__.load({
       }, []);
 
       React.useEffect(function () {
-        if (!connection || !sessionId) return undefined;
+        if (!connection || !sessionId || !prefs.enabled || prefs.position !== "chat") return undefined;
         var alive = true;
         var timer;
         function poll() {
@@ -987,7 +1030,7 @@ window.__ModuleLoader__.load({
         }
         poll();
         return function () { alive = false; if (timer !== undefined) clearTimeout(timer); };
-      }, [connection, sessionId]);
+      }, [connection, sessionId, prefs.enabled, prefs.position]);
 
       React.useEffect(function () {
         if (openIndex < 0) return undefined;
@@ -996,7 +1039,7 @@ window.__ModuleLoader__.load({
         return function () { document.removeEventListener("keydown", onKey); };
       }, [openIndex]);
 
-      if (events.length === 0 || !place.visible) return null;
+      if (!prefs.enabled || prefs.position !== "chat" || events.length === 0 || !place.visible) return null;
 
       var palette = accentColor();
       var accent = palette.accent;
@@ -1136,6 +1179,205 @@ window.__ModuleLoader__.load({
       );
     }
 
+    var COMPACTION_TAB_STYLE_ID = "dsh-auto-compaction-tab-style";
+    function ensureCompactionTabStyles() {
+      try {
+        if (typeof document === "undefined" || document.getElementById(COMPACTION_TAB_STYLE_ID) !== null) return;
+        var style = document.createElement("style");
+        style.id = COMPACTION_TAB_STYLE_ID;
+        style.textContent = [
+          ".dsh-ct{flex:1;min-height:0;height:100%;display:grid;grid-template-columns:282px minmax(0,1fr);",
+          "font-family:var(--dsh-font-sans,system-ui,'Segoe UI','Microsoft YaHei',sans-serif)}",
+          ".dsh-ct-rail{border-right:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));padding:16px 14px;overflow:auto;min-height:0}",
+          ".dsh-ct-railhead{display:flex;align-items:baseline;justify-content:space-between;margin:0 4px 14px}",
+          ".dsh-ct-railtitle{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,#eaf1f6)}",
+          ".dsh-ct-count{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-ct-tape{position:relative}",
+          ".dsh-ct-tape::before{content:\"\";position:absolute;left:94px;top:12px;bottom:12px;width:1px;opacity:.45;",
+          "background:linear-gradient(180deg,transparent,var(--dsh-ct-accent,#f14b0b) 12%,var(--dsh-ct-accent,#f14b0b) 88%,transparent)}",
+          ".dsh-ct-ev{position:relative;display:grid;grid-template-columns:70px 26px minmax(0,1fr);gap:6px;align-items:center;",
+          "width:100%;border:0;background:none;cursor:pointer;padding:7px 6px;border-radius:8px;text-align:left;margin-bottom:4px;color:inherit}",
+          ".dsh-ct-ev:hover{background:rgba(255,255,255,.03)}",
+          ".dsh-ct-ev.on{background:rgba(241,75,11,.12)}",
+          ".dsh-ct-time{font-family:ui-monospace,Consolas,monospace;font-size:11px;text-align:right;font-variant-numeric:tabular-nums;",
+          "color:var(--dsw-alias-label-primary,#d3d9df)}",
+          ".dsh-ct-beadwrap{display:grid;place-items:center}",
+          ".dsh-ct-bead{display:block;border-radius:50%;background:var(--dsh-ct-bead,#a84515)}",
+          ".dsh-ct-ev.on .dsh-ct-bead{background:var(--dsh-ct-accent,#f14b0b);",
+          "box-shadow:0 0 0 4px rgba(241,75,11,.16),0 0 12px rgba(241,75,11,.5)}",
+          ".dsh-ct-meta{font-size:10px;line-height:1.5;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-ct-meta b{font-weight:500;color:var(--dsw-alias-label-primary,#c9d0d8)}",
+          ".dsh-ct-detail{display:flex;flex-direction:column;min-height:0;overflow:auto;padding:18px 22px 22px}",
+          ".dsh-ct-detailhead{display:flex;align-items:baseline;gap:10px;margin-bottom:14px}",
+          ".dsh-ct-detailtitle{font-size:13.5px;font-weight:600;color:var(--dsw-alias-label-primary,#eaf1f6)}",
+          ".dsh-ct-stamp{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--dsw-alias-label-secondary,#88939c)}",
+          // Ring + metric rows sit side by side; the summary takes the rest.
+          ".dsh-ct-top{display:grid;grid-template-columns:auto minmax(0,1fr);gap:20px;align-items:start}",
+          ".dsh-ct-top .dsh-tl-hero{margin-bottom:0}",
+          ".dsh-ct-top .dsh-tl-row{padding:5px 0}",
+          ".dsh-ct-detail .dsh-tl-doctitle{margin-top:14px}",
+          ".dsh-ct-detail .dsh-tl-doc{flex:1;min-height:140px}",
+          ".dsh-ct-empty{flex:1;min-height:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;",
+          "gap:6px;text-align:center;padding:24px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#88939c);",
+          "font-family:var(--dsh-font-sans,system-ui,'Segoe UI','Microsoft YaHei',sans-serif)}",
+          ".dsh-ct-empty b{font-size:13.5px;font-weight:600;color:var(--dsw-alias-label-primary,#eaf1f6)}",
+          ".dsh-ct-empty span{max-width:420px;line-height:1.7}",
+          "@media (max-width:1000px){.dsh-ct-top{grid-template-columns:1fr;gap:12px}}",
+          "@media (max-width:760px){.dsh-ct{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}",
+          ".dsh-ct-rail{border-right:0;border-bottom:1px solid rgba(255,255,255,.08);max-height:160px}}",
+        ].join("");
+        document.head.appendChild(style);
+      } catch (error) { /* styling must never break the tab */ }
+    }
+
+    /* The 「压缩」 conversation tab: a master-detail timeline. Registered as a
+     * conversation.view entry (order 1000 → appended after existing tabs) only
+     * while the timeline is enabled and positioned to "tab". Reads the same
+     * history sidecar as the gutter chain; the detail reuses the dsh-tl detail
+     * classes so both surfaces stay visually identical. */
+    function CompactionTabView(props) {
+      ensureTimelineStyles();
+      ensureCompactionTabStyles();
+      var connection = props.connection;
+      var sessionId = props.sessionId;
+
+      var eventsState = React.useState([]);
+      var events = eventsState[0], setEvents = eventsState[1];
+      var selState = React.useState(-1);
+      var selected = selState[0], setSelected = selState[1];
+      var loadedState = React.useState(false);
+      var loaded = loadedState[0], setLoaded = loadedState[1];
+
+      React.useEffect(function () {
+        if (!connection || !sessionId) return undefined;
+        var alive = true;
+        var timer;
+        function poll() {
+          fetchHistory(connection, sessionId).then(function (value) {
+            if (!alive) return;
+            var list = value && Array.isArray(value.events) ? value.events : [];
+            setEvents(list);
+            setLoaded(true);
+            setSelected(function (current) {
+              if (list.length === 0) return -1;
+              return current < 0 || current >= list.length ? list.length - 1 : current;
+            });
+            timer = setTimeout(poll, 5000);
+          }).catch(function () {
+            if (!alive) return;
+            setLoaded(true);
+            timer = setTimeout(poll, 8000);
+          });
+        }
+        poll();
+        return function () { alive = false; if (timer !== undefined) clearTimeout(timer); };
+      }, [connection, sessionId]);
+
+      var palette = accentColor();
+      var accent = palette.accent;
+
+      if (!loaded) {
+        return h("div", { className: "dsh-ct-empty" }, h("span", null, "读取压缩记录中…"));
+      }
+      if (events.length === 0) {
+        return h("div", { className: "dsh-ct-empty" },
+          h("b", null, "还没有压缩记录"),
+          h("span", null, "达到触发点或手动 /compact 后，这里会列出每次压缩的时间、用时与交接文档。")
+        );
+      }
+
+      var index = selected >= 0 && selected < events.length ? selected : events.length - 1;
+      var active = events[index];
+      var before = Number(active.beforeTokens);
+      var windowTokens = Number(active.contextWindow);
+      var after = Number(active.afterTokens);
+      var threshold = Number(active.thresholdTokens);
+      var summaryTokens = Number(active.summaryTokens);
+      var pctValue = before > 0 && windowTokens > 0 ? (before / windowTokens) * 100 : null;
+      var ringSize = 84, ringR = ringSize / 2 - 7;
+      var ringC = 2 * Math.PI * ringR, ringCenter = ringSize / 2;
+      var filled = pctValue === null ? 0 : Math.max(0, Math.min(100, pctValue));
+      var attempts = Array.isArray(active.attempts) ? active.attempts : [];
+      var ring = h("figure", { className: "dsh-tl-ring" },
+        h("svg", { viewBox: "0 0 " + ringSize + " " + ringSize, width: ringSize, height: ringSize, "aria-hidden": "true" },
+          h("circle", { cx: ringCenter, cy: ringCenter, r: ringR, fill: "none", stroke: "rgba(241,75,11,.18)", strokeWidth: 7 }),
+          h("circle", {
+            cx: ringCenter, cy: ringCenter, r: ringR, fill: "none", stroke: accent, strokeWidth: 7, strokeLinecap: "round",
+            strokeDasharray: (ringC * filled / 100).toFixed(1) + " " + ringC.toFixed(1),
+            transform: "rotate(-90 " + ringCenter + " " + ringCenter + ")",
+          })
+        ),
+        h("figcaption", null, pctValue === null ? "—" : pctValue.toFixed(1) + "%", h("small", null, "占窗口"))
+      );
+      var rows = [
+        ["压缩用时", durationText(active.durationMs) + (Number(active.summaryMs) > 0 ? "（摘要 " + durationText(active.summaryMs) + "）" : "")],
+        ["触发方式", active.trigger === "manual" ? "手动 /compact" : "自动（空闲时）"],
+        ["交接文档", wordText(active)],
+        ["摘要输出", Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
+        ["替换历史", (fmt(Number(active.shadowedNodes) || 0) + " 条 / " + fmt(Number(active.shadowedTokens) || 0) + " tokens")],
+        ["闸门", String(attempts.length || 1) + " 次 · 缺失 0 节"],
+        ["模型", [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
+      ];
+
+      var rail = h("aside", { className: "dsh-ct-rail" },
+        h("div", { className: "dsh-ct-railhead" },
+          h("span", { className: "dsh-ct-railtitle" }, "压缩事件"),
+          h("span", { className: "dsh-ct-count" }, String(events.length))
+        ),
+        h("div", { className: "dsh-ct-tape" },
+          events.map(function (event, i) {
+            var chars = Number(event.cjk) || Number(event.summaryChars) || 0;
+            var bead = Math.max(6, Math.min(12, 6 + Math.round(chars / 220)));
+            return h("button", {
+              key: String(event.startedAt || i),
+              type: "button",
+              className: "dsh-ct-ev" + (i === index ? " on" : ""),
+              title: clockOf(event.startedAt) + " · " + durationText(event.durationMs) + " · " + fmt(chars) + " 字",
+              onClick: function () { setSelected(i); },
+            },
+              h("span", { className: "dsh-ct-time" }, clockOf(event.startedAt)),
+              h("span", { className: "dsh-ct-beadwrap" }, h("span", { className: "dsh-ct-bead", style: { width: bead + "px", height: bead + "px" } })),
+              h("span", { className: "dsh-ct-meta" }, durationText(event.durationMs) + " · ", h("b", null, fmt(chars)), " 字")
+            );
+          })
+        )
+      );
+
+      var detail = h("div", { className: "dsh-ct-detail" },
+        h("div", { className: "dsh-ct-detailhead" },
+          h("span", { className: "dsh-ct-detailtitle" }, "第 " + String(index + 1) + " 次压缩"),
+          h("span", { className: "dsh-ct-stamp" }, dateOf(active.startedAt) + " · " + clockOf(active.startedAt) + " · " + (active.trigger === "manual" ? "手动 /compact" : "自动"))
+        ),
+        h("div", { className: "dsh-ct-top" },
+          h("div", { className: "dsh-tl-hero" },
+            ring,
+            h("p", null,
+              h("b", null, (Number.isFinite(before) ? fmt(before) : "—") + " tokens"),
+              "触发时上下文",
+              h("br"),
+              "触发点阈值 " + (Number.isFinite(threshold) && threshold > 0 ? fmt(threshold) : "—"),
+              h("br"),
+              "压缩后 " + (Number.isFinite(after) ? fmt(after) : "—")
+            )
+          ),
+          h("div", { className: "dsh-tl-rows" },
+            rows.map(function (row) {
+              return h("div", { className: "dsh-tl-row", key: row[0] }, h("span", null, row[0]), h("b", null, row[1]));
+            })
+          )
+        ),
+        h("div", { className: "dsh-tl-doctitle" }, h("b", null, "交接文档全文"), h("span", null, wordText(active))),
+        h("pre", { className: "dsh-tl-doc" }, String(active.summary || "（本次未记录交接文档）")),
+        h("p", { className: "dsh-tl-note" }, "字数与时长为插件本地计算；tokens 取 DSH usage 与摘要调用 usage，不额外消耗模型算力。")
+      );
+
+      return h("div", {
+        className: "dsh-ct",
+        "data-dsh-handoff-compaction-tab": "1",
+        style: { "--dsh-ct-accent": accent, "--dsh-ct-bead": palette.bead },
+      }, rail, detail);
+    }
+
     function Section(props) {
       var connection = props.connection;
       var loaded = React.useState(null);
@@ -1178,6 +1420,7 @@ window.__ModuleLoader__.load({
           if (!alive) return;
           setSettings(value); setDraft(value);
           publishDisplayStyle(value && value.displayStyle);
+          publishTimelinePrefs(value);
           setStatus({ loading: false, error: "", saving: false, saved: false });
         }).catch(function (error) {
           if (alive) setStatus({ loading: false, error: String(error && error.message || error), saving: false, saved: false });
@@ -1196,6 +1439,8 @@ window.__ModuleLoader__.load({
       var template = base.templateFile || "";
       var defaultTemplate = base.defaultTemplate || DEFAULT_TEMPLATE;
       var themeStyle = normalizeDisplayStyle(base.displayStyle);
+      var tlEnabled = base.timelineEnabled !== false;
+      var tlPosition = normalizeTimelinePosition(base.timelinePosition);
       var capDefaultRaw = Number(base.defaultSummaryMaxTokens);
       var capDefault = Number.isFinite(capDefaultRaw) && capDefaultRaw >= 1 ? Math.floor(capDefaultRaw) : 20000;
       var capText = capDraft === null ? (base.summaryMaxTokens !== undefined ? String(base.summaryMaxTokens) : String(capDefault)) : capDraft;
@@ -1308,6 +1553,8 @@ window.__ModuleLoader__.load({
         JSON.stringify(settings.presets || []) !== JSON.stringify(presets) ||
         (settings.templateFile || "") !== template ||
         normalizeDisplayStyle(settings.displayStyle) !== themeStyle ||
+        (settings.timelineEnabled !== false) !== tlEnabled ||
+        normalizeTimelinePosition(settings.timelinePosition) !== tlPosition ||
         (settings.summaryMaxTokens ?? undefined) !== capValue;
 
       // The detection row reports what is on disk, so every unsaved choice that
@@ -1338,11 +1585,14 @@ window.__ModuleLoader__.load({
           presets: presets,
           templateFile: template,
           displayStyle: themeStyle,
+          timelineEnabled: tlEnabled,
+          timelinePosition: tlPosition,
           summaryMaxTokens: capValue,
         }).then(function (value) {
           setSettings(value); setDraft(value);
           setCapDraft(null);
           publishDisplayStyle(value && value.displayStyle);
+          publishTimelinePrefs(value);
           setStatus({ loading: false, error: "", saving: false, saved: true });
           setToken(token + 1);
         }).catch(function (error) {
@@ -1462,6 +1712,43 @@ window.__ModuleLoader__.load({
             })
           ),
           h(ThemePreview, { theme: themeStyle })
+        ),
+
+        h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
+          h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 } },
+            h("div", null,
+              h("div", { style: labelStyle }, "压缩时间线"),
+              h("div", { style: subStyle }, tlEnabled
+                ? "把每次压缩的时间、用时和字数显示在会话里，点击可查看交接文档全文。"
+                : "已关闭：不显示时间线，也不新增「压缩」页签；压缩历史仍会记录在磁盘上。")
+            ),
+            h(ToggleSwitch, {
+              checked: tlEnabled,
+              label: "压缩时间线",
+              onChange: function (value) { patch({ timelineEnabled: value }); },
+            })
+          ),
+          h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, marginTop: 11, opacity: tlEnabled ? 1 : 0.4 } },
+            h("span", { style: { fontSize: 12.5, color: C.text, fontWeight: 500 } }, "显示位置"),
+            h("div", { style: { display: "inline-flex", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
+              [["chat", "对话区域"], ["tab", "压缩页签"]].map(function (opt) {
+                var on = tlPosition === opt[0];
+                return h("button", {
+                  key: opt[0], type: "button",
+                  disabled: !tlEnabled,
+                  "aria-pressed": on ? "true" : "false",
+                  onClick: function () { if (tlEnabled) patch({ timelinePosition: opt[0] }); },
+                  style: { border: 0, cursor: tlEnabled ? "pointer" : "not-allowed", font: "inherit", fontSize: 12.5, padding: "7px 14px", background: on ? "rgba(76,141,255,.16)" : "#191a1d", color: on ? C.text : C.muted },
+                }, opt[1]);
+              })
+            )
+          ),
+          h("div", { style: Object.assign({}, subStyle, { marginTop: 7 }) }, tlEnabled
+            ? (tlPosition === "chat"
+              ? "珠链挂在「对话」正文左侧空槽，随会话常驻；切到「轨迹」自动隐藏。"
+              : "在「轨迹」和其它插件页签之后追加「压缩」页签，不占固定位置；集中浏览压缩记录与交接文档。")
+            : "时间线已关闭，显示位置暂不生效。"),
+          h("div", { style: { fontSize: 11.5, color: C.faint, marginTop: 8 } }, "保存后即时生效，无需重启；关闭仅隐藏显示，压缩历史仍会记录在磁盘上。")
         ),
 
         h("div", { style: rowStyle },
@@ -1612,11 +1899,47 @@ window.__ModuleLoader__.load({
       } catch (error) {
         console.warn("[handoff-ui] status dock registration failed", error);
       }
+
+      try {
+        slots.inject("conversation.view", function () {
+          var registration = null;
+          function sync() {
+            var want = timelinePrefs.enabled && timelinePrefs.position === "tab";
+            if (want && registration === null) {
+              registration = slots.register({
+                name: "conversation.view",
+                id: "auto-compaction-timeline",
+                // Appended after the existing tabs (chat 0, trajectory 10, …),
+                // never a fixed slot index, so other plugins' tabs keep their place.
+                order: 1000,
+                label: function () { return "压缩"; },
+                inject: function (sessionId) { return { sessionId: sessionId }; },
+              }, function CompactionView(slotProps) {
+                return h(CompactionTabView, { connection: connection, sessionId: slotProps.sessionId });
+              });
+            } else if (!want && registration !== null) {
+              registration();
+              registration = null;
+            }
+          }
+          var unsubscribe = subscribeTimelinePrefs(sync);
+          loadTimelinePrefs(connection);
+          sync();
+          return function () {
+            unsubscribe();
+            if (registration !== null) { registration(); registration = null; }
+          };
+        });
+      } catch (error) {
+        console.warn("[handoff-ui] compaction tab registration failed", error);
+      }
     }
 
     exports.name = name;
     exports.inject = inject;
     exports.apply = apply;
+    // Exposed for the structure test: renders the tab view with a fake React.
+    exports.CompactionTabView = CompactionTabView;
     return module.exports;
   },
 });
