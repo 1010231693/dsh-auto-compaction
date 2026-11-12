@@ -153,6 +153,60 @@ test("tab view renders the master-detail layout for a compaction event", () => {
   assert.match(text, /手动 \/compact/);
 });
 
+const SAVED = {
+  enabled: true,
+  thresholdRatio: 0.9,
+  scope: "preset",
+  presets: ["local"],
+  templateFile: "",
+  displayStyle: "orbit",
+  timelineEnabled: true,
+  timelinePosition: "chat",
+  defaultSummaryMaxTokens: 12288,
+};
+const INVENTORY = {
+  enabled: true,
+  scope: "preset",
+  source: "bundle-patch",
+  presets: [
+    { id: "standard", covered: true, effective: true },
+    { id: "local", covered: true, effective: true },
+    { id: "ptc", covered: true, effective: false },
+  ],
+  total: 3,
+  covered: 3,
+  mounted: 3,
+  effective: 1,
+  reason: "",
+};
+
+function renderSection(draft) {
+  stateQueue = [SAVED, draft, { loading: false, error: "", saving: false, saved: false },
+    { loading: false, error: "", value: INVENTORY }, 0, null];
+  return api.Section({ connection: {}, sessionId: "s1" });
+}
+
+test("settings section keeps the preset chips and drops the scope report", () => {
+  const text = textOf(renderSection(SAVED));
+  assert.match(text, /生效范围/);
+  assert.match(text, /standard/, "chips still come from the scope inventory");
+  assert.doesNotMatch(text, /当前生效情况|已由插件压缩|重新读取/);
+  assert.doesNotMatch(text, /保存后生效/, "a saved page shows no pending hint");
+});
+
+test("each unsaved field marks its own title as pending", () => {
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { presets: ["local", "ptc"] }))),
+    /生效范围（保存后生效）/);
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { scope: "global" }))),
+    /生效范围（保存后生效）/);
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { thresholdRatio: 0.75 }))),
+    /压缩触发点（保存后生效）/);
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { displayStyle: "strip" }))),
+    /压缩显示方式（保存后生效）/);
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { summaryMaxTokens: 16000 }))),
+    /摘要上限（保存后生效）/);
+});
+
 let failed = 0;
 for (const { name, fn } of cases) {
   stateQueue = [];

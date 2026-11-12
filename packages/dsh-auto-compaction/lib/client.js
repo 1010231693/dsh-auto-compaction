@@ -21,14 +21,24 @@ window.__ModuleLoader__.load({
     var inject = ["slots", "connection"];
     var CHANNEL = "/dsh-auto-compaction";
 
+    /* 全部取自宿主在 body 上投射的 --dsw-alias-* 令牌，深浅色由宿主切换
+     * body[data-ds-dark-theme]，插件不判断主题；兜底值只在宿主未提供时生效。
+     * 强调色是插件自己的标识色，只有它需要在 CSS 里按主题给两个值。 */
     var C = {
-      text: "var(--dsh-text-primary, #e8e9ea)",
-      muted: "var(--dsh-text-secondary, #9aa0a6)",
-      faint: "var(--dsh-text-tertiary, #7f858c)",
-      line: "var(--dsh-border, #2c2e33)",
-      panel: "var(--dsh-fill-secondary, #191a1d)",
-      accent: "#4c8dff",
-      ok: "#3fb950",
+      text: "var(--dsw-alias-label-primary, #e8e9ea)",
+      muted: "var(--dsw-alias-label-secondary, #9aa0a6)",
+      faint: "var(--dsw-alias-label-tertiary, #7f858c)",
+      line: "var(--dsw-alias-border-l2, #2c2e33)",
+      panel: "var(--dsw-alias-bg-layer-2, #191a1d)",
+      field: "var(--dsw-alias-bg-layer-1, #151619)",
+      canvas: "var(--dsw-alias-bg-base, #151619)",
+      accent: "var(--dac-accent, #4c8dff)",
+      accentSoft: "var(--dac-accent-soft, rgba(76,141,255,.14))",
+      accentLine: "var(--dac-accent-line, rgba(76,141,255,.55))",
+      ok: "var(--dsw-alias-state-success-primary, #3fb950)",
+      error: "var(--dsw-alias-state-error-primary, #e5534b)",
+      card: "var(--dsw-alias-bg-layer-3, #2c2e33)",
+      track: "rgba(127,133,140,.55)",
     };
 
     var DEFAULT_TEMPLATE = "~/.dsh-handoff-compaction/template.md";
@@ -186,6 +196,8 @@ window.__ModuleLoader__.load({
           ".dsh-handoff-opt-top::before{content:\"\";position:absolute;left:0;right:0;top:1px;height:2px;background:currentColor;border-radius:1px}",
           ".dsh-handoff-opt-top::after{content:\"\";position:absolute;left:2px;right:2px;bottom:1px;height:5px;border:1px solid currentColor;border-radius:2px;opacity:.6}",
           "@media (prefers-reduced-motion:reduce){.dsh-handoff-pulse,.dsh-handoff-orbit::before,.dsh-handoff-orbit::after,.dsh-handoff-orbit-core,.dsh-handoff-mini-orbit::before,.dsh-handoff-mini-orbit::after{animation:none}.dsh-handoff-fill::after{animation:none}}",
+          ".dac-section{--dac-accent:#2f6fed;--dac-accent-soft:rgba(47,111,237,.10);--dac-accent-line:rgba(47,111,237,.45)}",
+          "body[data-ds-dark-theme] .dac-section{--dac-accent:#4c8dff;--dac-accent-soft:rgba(76,141,255,.14);--dac-accent-line:rgba(76,141,255,.55)}",
         ].join("");
         document.head.appendChild(style);
       } catch (error) { /* styling must never break the dock */ }
@@ -603,7 +615,7 @@ window.__ModuleLoader__.load({
     function ThemePreview(props) {
       var style = normalizeDisplayStyle(props.theme);
       var chatChildren = [
-        h("div", { key: "user", style: { marginLeft: "auto", maxWidth: "62%", border: "1px solid rgba(76,141,255,.24)", background: "rgba(76,141,255,.14)", borderRadius: "7px 7px 2px 7px", padding: "4px 6px", fontSize: 9, color: "#d9dbde" } }, "请完整读取这个文件并总结…"),
+        h("div", { key: "user", style: { marginLeft: "auto", maxWidth: "62%", border: "1px solid " + C.accentLine, background: C.accentSoft, borderRadius: "7px 7px 2px 7px", padding: "4px 6px", fontSize: 9, color: C.text } }, "请完整读取这个文件并总结…"),
         h("div", { key: "lines", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 6 } },
           h("i", { key: "l1", style: { height: 4, borderRadius: 99, background: C.line } }),
           h("i", { key: "l2", style: { height: 4, borderRadius: 99, background: C.line, width: "88%" } }),
@@ -613,9 +625,9 @@ window.__ModuleLoader__.load({
       var overlay = null;
       if (style === "ring") {
         overlay = h("div", { style: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" } },
-          h("div", { style: { width: 104, border: "1px solid " + C.line, borderRadius: 8, background: "#23252a", padding: "7px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" } },
+          h("div", { style: { width: 104, border: "1px solid " + C.line, borderRadius: 8, background: C.card, padding: "7px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" } },
             h("div", { style: { position: "relative", width: 28, height: 28 } },
-              h("div", { style: { width: 28, height: 28, borderRadius: "50%", background: "conic-gradient(" + C.accent + " 0 66%, #2c2e33 66% 100%)", WebkitMask: "radial-gradient(circle, transparent 52%, #000 55%)", mask: "radial-gradient(circle, transparent 52%, #000 55%)" } }),
+              h("div", { style: { width: 28, height: 28, borderRadius: "50%", background: "conic-gradient(" + C.accent + " 0 66%, " + C.line + " 66% 100%)", WebkitMask: "radial-gradient(circle, transparent 52%, #000 55%)", mask: "radial-gradient(circle, transparent 52%, #000 55%)" } }),
               h("div", { style: { position: "absolute", inset: 0, display: "grid", placeItems: "center", fontSize: 7.5, fontFamily: "ui-monospace,Consolas,monospace" } }, "2/3")
             ),
             h("div", { style: { fontSize: 8.5, fontWeight: 500 } }, "正在压缩历史会话"),
@@ -624,7 +636,7 @@ window.__ModuleLoader__.load({
         );
       } else if (style === "orbit") {
         overlay = h("div", { style: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" } },
-          h("div", { style: { width: 104, border: "1px solid " + C.line, borderRadius: 8, background: "#23252a", padding: "7px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, textAlign: "center" } },
+          h("div", { style: { width: 104, border: "1px solid " + C.line, borderRadius: 8, background: C.card, padding: "7px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, textAlign: "center" } },
             h("div", { className: "dsh-handoff-mini-orbit" },
               h("span", { style: { position: "absolute", left: "50%", top: "50%", width: 4, height: 4, margin: "-2px 0 0 -2px", borderRadius: "50%", background: C.accent } })
             ),
@@ -636,14 +648,14 @@ window.__ModuleLoader__.load({
         overlay = h(React.Fragment, null,
           h("div", { key: "line", style: { position: "absolute", top: 0, left: 0, right: 0, height: 2, background: "linear-gradient(90deg, " + C.accent + " 0 62%, " + C.line + " 62% 100%)" } }),
           h("div", { key: "pillrow", style: { display: "flex", justifyContent: "center", paddingTop: 5 } },
-            h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, height: 16, padding: "0 6px", borderRadius: 999, border: "1px solid rgba(76,141,255,.45)", background: "#23252a", fontSize: 8 } },
+            h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, height: 16, padding: "0 6px", borderRadius: 999, border: "1px solid " + C.accentLine, background: C.card, fontSize: 8 } },
               h("span", { className: "dsh-handoff-pulse", style: { width: 4, height: 4, borderRadius: "50%", background: C.accent } }),
               "压缩中 · 2/3 · 00:42"
             )
           )
         );
       } else if (style === "corner") {
-        overlay = h("div", { style: { position: "absolute", right: 8, top: 9, boxSizing: "border-box", width: 104, display: "flex", alignItems: "flex-start", gap: 4, padding: "4px 5px", borderRadius: 5, background: "#23252a", border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent } },
+        overlay = h("div", { style: { position: "absolute", right: 8, top: 9, boxSizing: "border-box", width: 104, display: "flex", alignItems: "flex-start", gap: 4, padding: "4px 5px", borderRadius: 5, background: C.card, border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent } },
           h("span", { className: "dsh-handoff-pulse", style: { width: 4, height: 4, borderRadius: "50%", background: C.accent, marginTop: 4, flex: "0 0 auto" } }),
           h("div", { style: { minWidth: 0 } },
             h("div", { style: { fontSize: 7, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "正在压缩历史会话"),
@@ -652,7 +664,7 @@ window.__ModuleLoader__.load({
         );
       }
       var strip = style === "strip"
-        ? h("div", { style: { margin: "0 8px 4px", border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent, borderRadius: 5, background: "#212226", padding: "4px 6px" } },
+        ? h("div", { style: { margin: "0 8px 4px", border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent, borderRadius: 5, background: C.card, padding: "4px 6px" } },
           h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
             h("span", { className: "dsh-handoff-pulse", style: { width: 5, height: 5, borderRadius: "50%", background: C.accent } }),
             h("span", { style: { fontSize: 9, fontWeight: 500 } }, "正在压缩历史会话"),
@@ -664,9 +676,9 @@ window.__ModuleLoader__.load({
           )
         )
         : null;
-      return h("div", { style: { marginTop: 9, border: "1px solid " + C.line, borderRadius: 8, background: "#151619", overflow: "hidden" } },
+      return h("div", { style: { marginTop: 9, border: "1px solid " + C.line, borderRadius: 8, background: C.canvas, overflow: "hidden" } },
         h("div", { style: { height: 128, display: "flex", flexDirection: "column" } },
-          h("div", { style: { height: 24, flex: "0 0 24px", display: "flex", alignItems: "center", gap: 6, padding: "0 8px", borderBottom: "1px solid " + C.line, background: "#191a1d" } },
+          h("div", { style: { height: 24, flex: "0 0 24px", display: "flex", alignItems: "center", gap: 6, padding: "0 8px", borderBottom: "1px solid " + C.line, background: C.panel } },
             h("span", { style: { width: 5, height: 5, borderRadius: "50%", background: C.ok } }),
             h("span", { style: { fontSize: 9.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "读取大文件并提取校验串"),
             h("span", { style: { marginLeft: "auto", fontSize: 8.5, color: C.muted, border: "1px solid " + C.line, borderRadius: 999, padding: "0 6px" } }, "轻量本地")
@@ -677,8 +689,8 @@ window.__ModuleLoader__.load({
             (style === "ring" || style === "orbit") ? overlay : null
           ),
           strip,
-          h("div", { style: { flex: "0 0 26px", display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderTop: "1px solid " + C.line, background: "#191a1d" } },
-            h("div", { style: { flex: 1, height: 18, border: "1px solid " + C.line, borderRadius: 5, background: "#111214", color: C.faint, fontSize: 8, display: "flex", alignItems: "center", padding: "0 6px", whiteSpace: "nowrap", overflow: "hidden" } }, "发消息或创建任务…"),
+          h("div", { style: { flex: "0 0 26px", display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderTop: "1px solid " + C.line, background: C.panel } },
+            h("div", { style: { flex: 1, height: 18, border: "1px solid " + C.line, borderRadius: 5, background: C.canvas, color: C.faint, fontSize: 8, display: "flex", alignItems: "center", padding: "0 6px", whiteSpace: "nowrap", overflow: "hidden" } }, "发消息或创建任务…"),
             h("span", { style: { width: 16, height: 16, borderRadius: "50%", background: C.accent, flex: "0 0 auto" } })
           )
         )
@@ -700,8 +712,8 @@ window.__ModuleLoader__.load({
           flex: "0 0 auto",
           padding: 0,
           borderRadius: 999,
-          border: "1px solid " + (on ? "rgba(76,141,255,.7)" : C.line),
-          background: on ? C.accent : "#3a3d42",
+          border: "1px solid " + (on ? C.accentLine : C.line),
+          background: on ? C.accent : C.track,
           cursor: "pointer",
           transition: "background .16s ease, border-color .16s ease",
         },
@@ -1429,7 +1441,7 @@ window.__ModuleLoader__.load({
       }, [connection]);
 
       if (status.loading) return h("div", { style: { color: C.muted, padding: 18, fontSize: 13 } }, "读取设置中…");
-      if (status.error && !draft) return h("div", { style: { color: "#e0b341", padding: 18, fontSize: 13, lineHeight: 1.8 } }, "无法读取设置：" + status.error);
+      if (status.error && !draft) return h("div", { style: { color: "var(--dsw-alias-state-warn-primary, #e0b341)", padding: 18, fontSize: 13, lineHeight: 1.8 } }, "无法读取设置：" + status.error);
 
       var base = draft || { enabled: true, thresholdRatio: 0.9, scope: "global", presets: [], templateFile: "", displayStyle: "orbit" };
       var enabled = base.enabled !== false;
@@ -1454,89 +1466,6 @@ window.__ModuleLoader__.load({
         : capTrim === "" ? "留空 = 恢复默认 " + fmt(capDefault) + " tokens。"
           : "下一次压缩生效：单次摘要上限 " + fmt(capParsed) + " tokens。";
 
-      // Detection only: who compacts is decided by the preset slot (read from
-      // disk) times the 启用插件 switch. This row never changes either of them.
-      var SCOPE_TONE = {
-        native: { dot: "#6b7178", text: C.muted },
-        plugin: { dot: C.accent, text: "#cfe0ff" },
-        part: { dot: "#d29922", text: "#e6c98a" },
-        err: { dot: "#e5534b", text: "#f0b8b4" },
-      };
-      var scopeView = (function () {
-        var st = scope.value;
-        if (!st) {
-          return {
-            tone: "err",
-            text: scope.loading ? "读取中…" : "读不到生效情况",
-            sub: scope.loading
-              ? "正在向 DSH 读取预设名单与插件状态。"
-              : "读不到预设名单：" + (scope.error || "未知原因") + "。",
-            rows: [], retry: true,
-          };
-        }
-        var list = Array.isArray(st.presets) ? st.presets : [];
-        rememberPresetLabels(list);
-        var rows = list.map(function (p) {
-          return {
-            key: String(p.id),
-            label: presetLabel(p.id),
-            taken: p.effective === true,
-            owner: p.effective === true ? "插件" : p.covered === true ? "原生（未勾选）" : "原生（未覆盖）",
-          };
-        });
-        var names = rows.map(function (r) { return r.label; });
-        var takenNames = rows.filter(function (r) { return r.taken; }).map(function (r) { return r.label; });
-        var restNames = rows.filter(function (r) { return !r.taken; }).map(function (r) { return r.label; });
-        var total = Number(st.total) || list.length;
-        var covered = Number(st.covered) || 0;
-        var effective = Number(st.effective) || 0;
-        var globalSaved = st.scope !== "preset";
-        var scopeLead = globalSaved ? "全局生效：" : "按预设生效：";
-        var mechanism = "插件对压缩的接入在安装时自动生效、卸载时自动撤销，不会改动你现有的任何配置文件。";
-
-        if (total === 0) {
-          return {
-            tone: "err", text: "读不到预设", rows: [], retry: true,
-            sub: "DSH 没有返回任何 Agent 预设" + (st.reason ? "（" + st.reason + "）" : "") + "，所以无法判断压缩由谁负责。重新读取试试。",
-          };
-        }
-        if (covered === 0) {
-          return {
-            tone: "native", text: "DSH 原生压缩", rows: rows, retry: true,
-            sub: "本插件还没接入任何预设" + (st.reason ? "（" + st.reason + "）" : "")
-              + "，压缩目前由 DSH 自己完成。" + mechanism + " 新生成或新安装的预设需要重启一次 DSH 才能接入。",
-          };
-        }
-        if (effective === 0 && !enabled) {
-          return {
-            tone: "native", text: "DSH 原生压缩（插件已停用）", rows: rows, retry: false,
-            sub: "「启用插件」已关闭：" + takenNames.length + "/" + total + " 个预设虽然已由插件接入，但插件把压缩交回 DSH 自带实现。打开开关即恢复，不需要重启。",
-          };
-        }
-        if (effective === 0) {
-          return {
-            tone: "native", text: "DSH 原生压缩", rows: rows, retry: false,
-            sub: scopeLead + "当前没有任何预设处于接管状态（" + names.join("、") + " 都走原生）。"
-              + "勾选预设或切到「全局生效」并保存即可，下一次判定就生效，不需要重启。",
-          };
-        }
-        if (effective < total) {
-          return {
-            tone: "part", text: effective + "/" + total + " 预设已由插件压缩", rows: rows, retry: false,
-            sub: scopeLead + "由插件负责：" + takenNames.join("、") + "；" + restNames.join("、") + " 仍走各自的原生压缩。" + mechanism,
-          };
-        }
-        return {
-          tone: "plugin",
-          text: globalSaved ? "已由插件接管（全局）" : "已由插件接管",
-          rows: rows, retry: false,
-          sub: scopeLead + (globalSaved
-            ? "这 " + total + " 个预设（" + names.join("、") + "）"
-            : "勾选的 " + effective + " 个预设（" + takenNames.join("、") + "）")
-            + " 的压缩由本插件的交接文档负责，且「启用插件」是开的。" + mechanism,
-        };
-      })();
-      var scopeTone = SCOPE_TONE[scopeView.tone] || SCOPE_TONE.native;
       /* Only presets the takeover rows reach can be selected; the rest stay
        * native and would be misleading to offer. */
       var takeable = scope.value && Array.isArray(scope.value.presets)
@@ -1557,19 +1486,25 @@ window.__ModuleLoader__.load({
         normalizeTimelinePosition(settings.timelinePosition) !== tlPosition ||
         (settings.summaryMaxTokens ?? undefined) !== capValue;
 
-      // The detection row reports what is on disk, so every unsaved choice that
-      // would change that report has to be named — otherwise it looks ignored.
-      var enabledIsPending = settings !== null && (settings.enabled !== false) !== enabled;
-      var scopeIsPending = settings !== null && (settings.scope === "preset") !== scopePreset;
-      var presetsIsPending = settings !== null && scopePreset &&
-        JSON.stringify(presets.slice().sort()) !== JSON.stringify((settings.presets || []).slice().sort());
-      var pendingParts = [];
-      if (enabledIsPending) pendingParts.push("「启用插件」改成" + (enabled ? "开" : "关"));
-      if (scopeIsPending) pendingParts.push("生效范围改成「" + (scopePreset ? "按预设生效" : "全局生效") + "」");
-      if (presetsIsPending) pendingParts.push("勾选的预设改成" + (presets.length ? presets.map(presetLabel).join("、") : "（都不勾）"));
-      var pendingNote = pendingParts.length
-        ? "还没保存：" + pendingParts.join("；") + "。保存后开关与勾选在下一次判定就生效，不需要重启；只有新预设需要接入插件时才需要重启一次 DSH。"
-        : "";
+      // Every field is read from disk at decision time, so an unsaved edit says
+      // nothing has happened yet: mark just that field 保存后生效.
+      var saved = settings;
+      var scopeIsPending = saved !== null && (saved.scope === "preset") !== scopePreset;
+      var presetsIsPending = saved !== null && scopePreset &&
+        JSON.stringify(presets.slice().sort()) !== JSON.stringify((saved.presets || []).slice().sort());
+      var pending = {
+        enabled: saved !== null && (saved.enabled !== false) !== enabled,
+        scope: scopeIsPending || presetsIsPending,
+        display: saved !== null && normalizeDisplayStyle(saved.displayStyle) !== themeStyle,
+        timeline: saved !== null && (saved.timelineEnabled !== false) !== tlEnabled,
+        position: saved !== null && normalizeTimelinePosition(saved.timelinePosition) !== tlPosition,
+        ratio: saved !== null && Math.round((saved.thresholdRatio || 0.9) * 100) !== ratio,
+        cap: saved !== null && (saved.summaryMaxTokens ?? undefined) !== capValue,
+        template: saved !== null && (saved.templateFile || "") !== template,
+      };
+      var pendingTag = function (on) {
+        return on ? h("span", { "aria-live": "polite", style: pendingStyle }, "（保存后生效）") : null;
+      };
 
       function patch(next) { setDraft(Object.assign({}, base, next)); setStatus({ loading: false, error: "", saving: false, saved: false }); }
       function setPreset(id) {
@@ -1612,22 +1547,23 @@ window.__ModuleLoader__.load({
       var rowStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "14px 0", borderBottom: "1px solid " + C.line };
       var labelStyle = { fontSize: 13.5, fontWeight: 600, color: C.text };
       var subStyle = { fontSize: 12, color: C.muted, marginTop: 3, lineHeight: 1.6 };
-      var btnBase = { border: "1px solid " + C.line, background: "#191a1d", color: C.text, fontSize: 12, padding: "6px 11px", borderRadius: 7, cursor: "pointer", font: "inherit", whiteSpace: "nowrap" };
-      var btnPrimary = Object.assign({}, btnBase, { borderColor: "rgba(76,141,255,.55)", background: "rgba(76,141,255,.14)" });
+      var btnBase = { border: "1px solid " + C.line, background: "transparent", color: C.text, fontSize: 12, padding: "6px 11px", borderRadius: 7, cursor: "pointer", font: "inherit", whiteSpace: "nowrap" };
+      var btnPrimary = Object.assign({}, btnBase, { borderColor: "transparent", background: C.accent, color: "#fff", fontWeight: 600 });
       var seg = function (active, label, onClick) {
         return h("button", {
           type: "button", onClick: onClick,
-          style: { border: 0, cursor: "pointer", font: "inherit", fontSize: 12.5, padding: "7px 14px", background: active ? "rgba(76,141,255,.16)" : "#191a1d", color: active ? C.text : C.muted },
+          style: { border: 0, cursor: "pointer", font: "inherit", fontSize: 12.5, padding: "7px 14px", background: active ? C.accentSoft : "transparent", boxShadow: active ? "inset 0 0 0 1px " + C.accentLine : "none", color: active ? C.text : C.muted, fontWeight: active ? 600 : 400, whiteSpace: "nowrap" },
         }, label);
       };
 
       var offBadgeStyle = { marginLeft: 6, fontSize: 10.5, color: C.muted, background: "rgba(127,133,140,.14)", border: "1px solid " + C.line, borderRadius: 999, padding: "0 6px", lineHeight: "16px", fontWeight: 400 };
+      var pendingStyle = { marginLeft: 8, fontSize: 11.5, fontWeight: 400, color: C.error };
 
-      return h("div", { style: { display: "flex", flexDirection: "column", paddingBottom: 12 } },
+      return h("div", { className: "dac-section", style: { display: "flex", flexDirection: "column", paddingBottom: 12 } },
 
         h("div", { style: rowStyle },
           h("div", null,
-            h("div", { style: labelStyle }, "启用插件", !enabled ? h("span", { style: offBadgeStyle }, "已停用") : null),
+            h("div", { style: labelStyle }, "启用插件", pendingTag(pending.enabled), !enabled ? h("span", { style: offBadgeStyle }, "已停用") : null),
             h("div", { style: subStyle }, enabled
               ? "达到触发点后，等 agent 空闲时把历史折叠成一份交接文档；压缩由本插件接管。"
               : "关闭后压缩交回 DSH 原生实现：按原生阈值自动折叠，也可继续用 /compact 手动压缩。")
@@ -1641,73 +1577,43 @@ window.__ModuleLoader__.load({
 
         h("div", { style: rowStyle },
           h("div", null,
-            h("div", { style: labelStyle }, "生效范围"),
-            h("div", { style: subStyle }, scopePreset ? "只有勾选的预设由插件压缩，其余预设保持 DSH 自带行为；预设名单读自 DSH 本身" : "所有能被本插件接入的预设都由插件压缩，共用这份设置")
+            h("div", { style: labelStyle }, "生效范围", pendingTag(pending.scope)),
+            h("div", { style: subStyle }, scopePreset ? "只有勾选的预设由插件压缩，其余预设保持 DSH 自带行为" : "所有能被本插件接入的预设都由插件压缩，共用这份设置")
           ),
-          h("div", { style: { display: "inline-flex", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
-            seg(!scopePreset, "全局生效", function () { patch({ scope: "global" }); }),
-            seg(scopePreset, "按预设生效", function () { patch({ scope: "preset" }); })
+          h("div", { style: { display: "inline-flex", flex: "0 0 auto", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
+            seg(!scopePreset, "全局", function () { patch({ scope: "global" }); }),
+            seg(scopePreset, "预设", function () { patch({ scope: "preset" }); })
           )
         ),
         scopePreset ? h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 0", borderBottom: "1px solid " + C.line } },
           takeable.length === 0
             ? h("span", { style: subStyle }, scope.loading
               ? "正在向 DSH 读取预设名单…"
-              : "本插件还没接入任何预设。重启一次 DSH 会重新接入；仍未出现预设名单说明 DSH 没有返回预设。")
+              : scope.error || (scope.value && scope.value.reason)
+                ? "读取预设名单失败：" + (scope.error || scope.value.reason) + "。重新打开本页会再读一次。"
+                : "本插件还没接入任何预设。重启一次 DSH 会重新接入；仍未出现预设名单说明 DSH 没有返回预设。")
             : takeable.map(function (p) {
                 var on = presets.indexOf(p.id) >= 0;
                 return h("button", {
                   key: p.id, type: "button", onClick: function () { setPreset(p.id); },
-                  style: { fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer", font: "inherit", border: "1px solid " + (on ? C.accent : C.line), background: on ? "rgba(76,141,255,.12)" : "#191a1d", color: on ? C.text : C.muted },
+                  style: { fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer", font: "inherit", border: "1px solid " + (on ? C.accentLine : C.line), background: on ? C.accentSoft : "transparent", color: on ? C.text : C.muted },
                 }, presetLabel(p.id));
               })
         ) : null,
 
-        h("div", { style: rowStyle },
-          h("div", { style: { minWidth: 0 } },
-            h("div", { style: labelStyle }, "当前生效情况"),
-            h("div", { style: subStyle }, scopeView.sub),
-            scopeView.rows.length
-              ? h("div", { style: { display: "flex", gap: "6px 16px", flexWrap: "wrap", marginTop: 7 } },
-                scopeView.rows.map(function (r) {
-                  return h("span", { key: r.key, style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: C.muted } },
-                    h("i", { "aria-hidden": true, style: { width: 6, height: 6, borderRadius: "50%", background: r.taken ? C.accent : "#6b7178" } }),
-                    r.label,
-                    h("em", { style: { fontStyle: "normal", color: C.faint } }, r.owner));
-                })
-              )
-              : null,
-            pendingNote ? h("div", { style: { fontSize: 11.5, color: "#d29922", marginTop: 6 } }, pendingNote) : null,
-            scope.error && scope.value ? h("div", { style: { fontSize: 11.5, color: "#e5534b", marginTop: 6 } }, "读取失败：" + scope.error) : null
-          ),
-          h("div", { style: { display: "inline-flex", alignItems: "center", gap: 12, flex: "0 0 auto" } },
-            h("span", { "aria-live": "polite", style: { display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5, color: scopeTone.text } },
-              h("i", { "aria-hidden": true, style: { width: 7, height: 7, borderRadius: "50%", background: scopeTone.dot } }),
-              scopeView.text
-            ),
-            scopeView.retry && !scope.loading
-              ? h("button", {
-                type: "button",
-                onClick: function () { setToken(token + 1); },
-                style: Object.assign({}, btnBase, { fontSize: 11.5, padding: "4px 9px" }),
-              }, "重新读取")
-              : null
-          )
-        ),
-
         h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
           h("div", null,
-            h("div", { style: labelStyle }, "压缩显示方式"),
+            h("div", { style: labelStyle }, "压缩显示方式", pendingTag(pending.display)),
             h("div", { style: subStyle }, "选择压缩进行时在会话里的提示样式；保存后下一次压缩生效。")
           ),
-          h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap", padding: 3, border: "1px solid " + C.line, borderRadius: 8, background: "#191a1d", width: "fit-content", maxWidth: "100%", marginTop: 9 } },
+          h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap", padding: 3, border: "1px solid " + C.line, borderRadius: 8, background: "transparent", width: "fit-content", maxWidth: "100%", marginTop: 9 } },
             DISPLAY_OPTIONS.map(function (option) {
               var on = themeStyle === option.id;
               return h("button", {
                 key: option.id, type: "button",
                 onClick: function () { patch({ displayStyle: option.id }); },
                 "aria-pressed": on ? "true" : "false",
-                style: { display: "inline-flex", alignItems: "center", gap: 6, height: 30, padding: "0 10px", border: 0, borderRadius: 6, background: on ? "rgba(76,141,255,.16)" : "transparent", color: on ? C.text : C.muted, cursor: "pointer", font: "inherit", fontSize: 12.5, whiteSpace: "nowrap" },
+                style: { display: "inline-flex", alignItems: "center", gap: 6, height: 30, padding: "0 10px", border: 0, borderRadius: 6, background: on ? C.accentSoft : "transparent", boxShadow: on ? "inset 0 0 0 1px " + C.accentLine : "none", color: on ? C.text : C.muted, cursor: "pointer", font: "inherit", fontSize: 12.5, fontWeight: on ? 600 : 400, whiteSpace: "nowrap" },
               }, h("span", { className: "dsh-handoff-opt dsh-handoff-opt-" + option.id, "aria-hidden": "true" }), option.label);
             })
           ),
@@ -1717,7 +1623,7 @@ window.__ModuleLoader__.load({
         h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
           h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 } },
             h("div", null,
-              h("div", { style: labelStyle }, "压缩时间线"),
+              h("div", { style: labelStyle }, "压缩时间线", pendingTag(pending.timeline)),
               h("div", { style: subStyle }, tlEnabled
                 ? "把每次压缩的时间、用时和字数显示在会话里，点击可查看交接文档全文。"
                 : "已关闭：不显示时间线，也不新增「压缩」页签；压缩历史仍会记录在磁盘上。")
@@ -1729,8 +1635,8 @@ window.__ModuleLoader__.load({
             })
           ),
           h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, marginTop: 11, opacity: tlEnabled ? 1 : 0.4 } },
-            h("span", { style: { fontSize: 12.5, color: C.text, fontWeight: 500 } }, "显示位置"),
-            h("div", { style: { display: "inline-flex", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
+            h("span", { style: { fontSize: 12.5, color: C.text, fontWeight: 500 } }, "显示位置", pendingTag(pending.position)),
+            h("div", { style: { display: "inline-flex", flex: "0 0 auto", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
               [["chat", "对话区域"], ["tab", "压缩页签"]].map(function (opt) {
                 var on = tlPosition === opt[0];
                 return h("button", {
@@ -1738,7 +1644,7 @@ window.__ModuleLoader__.load({
                   disabled: !tlEnabled,
                   "aria-pressed": on ? "true" : "false",
                   onClick: function () { if (tlEnabled) patch({ timelinePosition: opt[0] }); },
-                  style: { border: 0, cursor: tlEnabled ? "pointer" : "not-allowed", font: "inherit", fontSize: 12.5, padding: "7px 14px", background: on ? "rgba(76,141,255,.16)" : "#191a1d", color: on ? C.text : C.muted },
+                  style: { border: 0, cursor: tlEnabled ? "pointer" : "not-allowed", font: "inherit", fontSize: 12.5, padding: "7px 14px", background: on ? C.accentSoft : "transparent", boxShadow: on ? "inset 0 0 0 1px " + C.accentLine : "none", color: on ? C.text : C.muted, fontWeight: on ? 600 : 400, whiteSpace: "nowrap" },
                 }, opt[1]);
               })
             )
@@ -1753,7 +1659,7 @@ window.__ModuleLoader__.load({
 
         h("div", { style: rowStyle },
           h("div", null,
-            h("div", { style: labelStyle }, "压缩触发点"),
+            h("div", { style: labelStyle }, "压缩触发点", pendingTag(pending.ratio)),
             h("div", { style: subStyle }, "上下文占用达到这个比例后，等当前这轮回答结束再压缩")
           ),
           h("div", { style: { display: "flex", alignItems: "center", gap: 12 } },
@@ -1762,7 +1668,7 @@ window.__ModuleLoader__.load({
               style: { width: 220, accentColor: C.accent },
               onChange: function (e) { patch({ thresholdRatio: snapPercent(e.target.value) / 100 }); },
             }),
-            h("div", { style: { display: "flex", alignItems: "center", border: "1px solid " + C.line, borderRadius: 8, background: "#151619", height: 32, overflow: "hidden" } },
+            h("div", { style: { display: "flex", alignItems: "center", border: "1px solid " + C.line, borderRadius: 8, background: C.field, height: 32, overflow: "hidden" } },
               h("input", {
                 type: "number", min: 0, max: 100, value: ratio, "aria-label": "压缩触发点百分比",
                 style: { width: 52, height: 30, border: 0, background: "transparent", color: C.text, textAlign: "right", padding: "0 4px 0 10px", fontSize: 13, outline: "none" },
@@ -1785,11 +1691,11 @@ window.__ModuleLoader__.load({
         ),
 
         h("div", { style: { padding: "14px 0", borderBottom: "1px solid " + C.line } },
-          h("div", { style: labelStyle }, "摘要上限"),
+          h("div", { style: labelStyle }, "摘要上限", pendingTag(pending.cap)),
           h("div", { style: Object.assign({}, subStyle, { marginTop: 6, marginBottom: 10 }) },
             "单次摘要生成的输出上限，默认 " + fmt(capDefault) + " tokens；最低 8,192，留空恢复默认。写到上限后会自动续写或重写，各自独立预算。"),
           h("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
-            h("div", { style: { display: "flex", alignItems: "center", border: "1px solid " + (capError ? "#e5534b" : C.line), borderRadius: 8, background: "#151619", height: 34, overflow: "hidden", width: 190 } },
+            h("div", { style: { display: "flex", alignItems: "center", border: "1px solid " + (capError ? C.error : C.line), borderRadius: 8, background: C.field, height: 34, overflow: "hidden", width: 190 } },
               h("input", {
                 type: "text", inputMode: "numeric", value: capText, "aria-label": "摘要上限 tokens",
                 onChange: function (e) { setCapDraft(e.target.value); },
@@ -1799,17 +1705,17 @@ window.__ModuleLoader__.load({
             ),
             h("button", { type: "button", style: btnBase, onClick: function () { setCapDraft(String(capDefault)); } }, "恢复默认")
           ),
-          h("div", { style: { marginTop: 8, fontSize: 11.5, lineHeight: 1.6, color: capError ? "#e5534b" : capTrim === "" ? C.muted : C.ok } }, capMessage)
+          h("div", { style: { marginTop: 8, fontSize: 11.5, lineHeight: 1.6, color: capError ? C.error : capTrim === "" ? C.muted : C.ok } }, capMessage)
         ),
 
         h("div", { style: { paddingTop: 14 } },
-          h("div", { style: labelStyle }, "交接模板"),
+          h("div", { style: labelStyle }, "交接模板", pendingTag(pending.template)),
           h("div", { style: Object.assign({}, subStyle, { marginBottom: 8 }) }, "压缩时让模型按这份模板写交接文档；每次压缩时读取，改完不用重启。此插件模板完全基于 DSH 原生压缩模板的中文翻译版，若需要撤销自己的修改，只需要从磁盘删除该模板文件，然后重启 DSH，模板会自动重建。"),
-          h("div", { style: { display: "flex", alignItems: "center", gap: 8, background: "#151619", border: "1px solid " + C.line, borderRadius: 8, padding: "7px 10px" } },
+          h("div", { style: { display: "flex", alignItems: "center", gap: 8, background: C.field, border: "1px solid " + C.line, borderRadius: 8, padding: "7px 10px" } },
             h("input", {
               value: template, placeholder: defaultTemplate, "aria-label": "模板文件路径",
               onChange: function (e) { patch({ templateFile: e.target.value }); },
-              style: { flex: 1, border: 0, background: "transparent", color: "#c9ced6", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 12, outline: "none" },
+              style: { flex: 1, border: 0, background: "transparent", color: C.text, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 12, outline: "none" },
             }),
             h("button", { type: "button", style: btnBase, onClick: function () { open("file"); } }, "打开文件"),
             h("button", { type: "button", style: btnBase, onClick: function () { open("folder"); } }, "所在文件夹")
@@ -1833,7 +1739,7 @@ window.__ModuleLoader__.load({
           h("button", { type: "button", style: dirty && capError === "" ? btnPrimary : Object.assign({}, btnBase, { opacity: 0.55 }), onClick: dirty && capError === "" ? save : undefined }, status.saving ? "保存中…" : "保存"),
           h("button", { type: "button", style: btnBase, onClick: discard }, "撤销改动"),
           status.note ? h("span", { style: { fontSize: 12, color: C.ok } }, status.note) : status.saved ? h("span", { style: { fontSize: 12, color: C.ok } }, "已保存，下次判定生效") : null,
-          status.error ? h("span", { style: { fontSize: 12, color: "#e5534b" } }, status.error) : null
+          status.error ? h("span", { style: { fontSize: 12, color: C.error } }, status.error) : null
         )
       );
     }
@@ -1940,6 +1846,7 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     // Exposed for the structure test: renders the tab view with a fake React.
     exports.CompactionTabView = CompactionTabView;
+    exports.Section = Section;
     return module.exports;
   },
 });
