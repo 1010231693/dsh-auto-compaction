@@ -23,6 +23,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { BlockAssembler, LlmError, contentHasImage } from "@deepseek-ai/dsh-llm";
 import BasicCompactionEngine from "@deepseek-ai/dsh-compaction-basic";
+import { toolPairingBalancedBefore } from "@deepseek-ai/dsh-compaction";
 import { decideTrigger, shouldAttempt } from "./plan.js";
 import { appendHistory, countWords } from "./history.js";
 import { writeStatus } from "./status.js";
@@ -39,6 +40,11 @@ import {
 const LOG = "[handoff]";
 const MAX_SUMMARY_ATTEMPTS = 3;
 const MIN_SUMMARY_TOKENS = 8_192;
+// A mid-turn compaction needs room for thinking, the summary output and the
+// tools envelope. 20k is the floor the settings page allows; the ceiling is
+// half the model window.
+const MIN_MID_TASK_TRIGGER = 20_000;
+const DEFAULT_MID_TASK_TRIGGER = 20_000;
 // The timeline shows the handoff document; a pathological one must not bloat
 // the append-only history. 20k chars is ~7k Chinese tokens.
 const MAX_STORED_SUMMARY_CHARS = 20_000;
@@ -165,6 +171,94 @@ function errorCodeOf(error) {
   return error !== null && typeof error === "object" && typeof error.code === "string" ? error.code : "";
 }
 
+/**
+ * Clamp the configured remaining-token trigger to what this model can honour.
+ * The floor is the space the summary call itself needs; the ceiling is half
+ * the window, so a forced compaction can never run when the history is already
+ * larger than the retained tail plus the trigger.
+ */
+function midTaskTriggerTokens(live, contextWindow) {
+  const raw = Number(live?.midTaskTriggerTokens);
+  const configured = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_MID_TASK_TRIGGER;
+  const ceiling = Math.max(MIN_MID_TASK_TRIGGER, Math.floor(contextWindow / 2));
+  return Math.max(MIN_MID_TASK_TRIGGER, Math.min(configured, ceiling));
+}
+
+/**
+ * True when a failed compaction most likely ran out of room for its own
+ * request. Those are the only failures worth interrupting the user for: the
+ * fix is a mid-task trigger, not a different template or provider.
+ */
+function isHeadroomFailure(error) {
+  if (errorCodeOf(error) === "CONTEXT_WINDOW_EXCEEDED") return true;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /smaller summary|context window|context length|too many tokens|exceeds? (the )?(model )?context/i.test(message);
+}
+
+/**
+ * Numbers the dialog shows. Everything comes from the live measurement and
+ * the routed model's window — the UI never hard-codes a window size.
+ */
+function buildFailureHint({ kind, totalTokens, contextWindow, triggerTokens }) {
+  const windowTokens = Math.floor(contextWindow);
+  const usedTokens = Math.max(0, Math.floor(totalTokens));
+  const remainingTokens = Math.max(0, windowTokens - usedTokens);
+  const trigger = Math.max(MIN_MID_TASK_TRIGGER, Math.floor(triggerTokens || DEFAULT_MID_TASK_TRIGGER));
+  const neededTokens = kind === "raise-trigger" ? trigger + 8_000 : MIN_MID_TASK_TRIGGER;
+  const suggestTokens = kind === "raise-trigger"
+    ? Math.min(Math.ceil((neededTokens + 12_000) / 5_000) * 5_000, Math.max(MIN_MID_TASK_TRIGGER, Math.floor(windowTokens / 2)))
+    : MIN_MID_TASK_TRIGGER;
+  return {
+    kind,
+    usedTokens,
+    windowTokens,
+    remainingTokens,
+    neededTokens,
+    triggerTokens: trigger,
+    suggestTokens,
+    at: Date.now(),
+  };
+}
+
+function isSystemHead(session, seq) {
+  try {
+    return session.eventAt(seq)?.type === "system/message";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Same selection rule as the stock pressure path: keep a priced recent tail,
+ * never split a tool-call/result pair, and start after the system head. The
+ * range is handed to the stock transaction, so retention and commit semantics
+ * stay identical to the idle path.
+ */
+function selectCompactableRange(session, measurement, retainTokens) {
+  const priced = measurement?.nodes;
+  if (!Array.isArray(priced) || priced.length === 0) return null;
+  const surface = session?.surface?.nodes;
+  if (!Array.isArray(surface) || surface.length !== priced.length) return null;
+  for (let index = 0; index < surface.length; index += 1) {
+    if (surface[index] !== priced[index]?.seq) return null;
+  }
+  const firstIdx = isSystemHead(session, surface[0]) ? 1 : 0;
+  let accumulated = 0;
+  let keepFromIdx = priced.length;
+  for (let index = priced.length - 1; index >= 0; index -= 1) {
+    accumulated += priced[index].tokens;
+    keepFromIdx = index;
+    if (accumulated >= retainTokens) break;
+  }
+  if (keepFromIdx <= firstIdx) return null;
+  while (keepFromIdx > firstIdx) {
+    if (toolPairingBalancedBefore(session, surface[keepFromIdx])) break;
+    keepFromIdx -= 1;
+  }
+  if (keepFromIdx <= firstIdx) return null;
+  return { start: surface[firstIdx], end: surface[keepFromIdx - 1] };
+}
+
 export default class HandoffCompaction extends BasicCompactionEngine {
   static inject = ["llm", "tokenMeter", "sessions"];
 
@@ -240,6 +334,9 @@ export default class HandoffCompaction extends BasicCompactionEngine {
     // pinning the engine's memory.
     this.decisions = new WeakMap();
     this.summaries = new WeakMap();
+    // Forced mid-turn compactions keep their own retry gate: a failed attempt
+    // must not be retried on every step of the same turn.
+    this.midAttempts = new WeakMap();
     ctx.on("agent/status", ({ agent, status }) => {
       if (agent?.session) this.agents.set(agent.session, agent);
       if (status === "idle") this.scheduleCheck(agent, "agent/status idle");
@@ -250,6 +347,18 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       if (event?.type !== "turn/end") return;
       const owner = this.agents.get(session);
       if (owner !== undefined) this.scheduleCheck(owner, "turn/end");
+    });
+    // Forced mid-turn compaction runs at the step boundary, exactly where the
+    // stock pressure trigger would run: the turn keeps going afterwards, so no
+    // cancel/resume is involved and the summary request still reuses the cached
+    // prefix. Inert unless the user turned the switch on.
+    ctx.on("agent/pre-step", async ({ agent, signal }, next) => {
+      try {
+        await this.midTaskCompaction(agent, signal);
+      } catch (error) {
+        this.log(`midtask check failed: ${error instanceof Error ? error.message : String(error)}`, "warn");
+      }
+      return next();
     });
     this.log(`ready (threshold ${this.describeThreshold()}, dryRun=${this.handoff.dryRun}, trace=${this.handoff.traceFile || (this.handoff.traceConsole ? "console" : "off")})`);
   }
@@ -411,6 +520,7 @@ export default class HandoffCompaction extends BasicCompactionEngine {
         timeoutMs: this.handoff.timeoutMs,
         provider: target.provider,
         model: target.model,
+        failureHint: null,
       });
       try {
         const result = await this.compactNow(agent, AbortSignal.timeout(this.handoff.timeoutMs));
@@ -445,6 +555,9 @@ export default class HandoffCompaction extends BasicCompactionEngine {
           error: message,
           errorCode: errorCodeOf(error),
         });
+        // The idle path reached the end of the turn too late for its own
+        // summary request: the dialog offers the mid-task switch.
+        await this.writeFailureHint(agent, error, measurement.totalTokens, contextWindow);
         throw error;
       } finally {
         this.running.delete(agent);
@@ -460,6 +573,170 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       });
       this.log(`failed: ${message}`, "warn");
     }
+  }
+
+  /**
+   * Forced compaction at a step boundary.
+   *
+   * The trigger is expressed as remaining headroom: when `window - used` falls
+   * to or below the configured value, the oldest span is folded into one
+   * handoff checkpoint *before* the next model request. The stock transaction
+   * owns the surface lock and the commit, and the agent loop then builds its
+   * next request from the compacted surface — the turn continues by itself, so
+   * "stop and resume" never happens and no full prefill is required.
+   */
+  async midTaskCompaction(agent, signal) {
+    if (!this.handoffEnabled() || signal?.aborted === true) return;
+    if (this.running.has(agent)) return;
+    const live = readSettings();
+    if (live?.midTaskEnabled !== true) return;
+    const session = agent?.session;
+    if (!session) return;
+    const target = this.routedTarget(agent);
+    if (target === undefined) return;
+
+    let measurement;
+    try {
+      measurement = this.ctx.tokenMeter.measure(session);
+    } catch {
+      return;
+    }
+    const info = await this.ctx.llm.resolveModelInfo(target.provider, target.model);
+    const headerMaxTokens = session.requestHeader?.()?.config?.maxTokens;
+    const reserved = this.handoff.reservedOverride >= 0
+      ? this.handoff.reservedOverride
+      : (headerMaxTokens ?? info.defaultMaxTokens ?? 0);
+    const contextWindow = this.handoff.contextWindowOverride > 0
+      ? this.handoff.contextWindowOverride
+      : info.context?.contextWindow;
+    if (!Number.isFinite(contextWindow) || contextWindow <= 0) return;
+
+    const trigger = midTaskTriggerTokens(live, contextWindow);
+    const remaining = contextWindow - measurement.totalTokens;
+    if (remaining > trigger) {
+      return this.log(`midtask: ${measurement.totalTokens}/${contextWindow} (remaining ${remaining} > trigger ${trigger})`);
+    }
+    const last = this.midAttempts.get(agent);
+    if (!shouldAttempt({
+      now: Date.now(),
+      last,
+      tokens: measurement.totalTokens,
+      thresholdTokens: contextWindow - trigger,
+      minIntervalMs: this.handoff.minIntervalMs,
+      minTokenGrowth: this.handoff.minTokenGrowth,
+    })) {
+      return this.log(`midtask: at trigger (remaining ${remaining}) but holding: retry gate`);
+    }
+
+    const retained = this.config.retainTokens !== undefined
+      ? Math.floor(this.config.retainTokens)
+      : Math.floor(Math.max(0, contextWindow - reserved) * (this.config.retainRatio ?? 0.16));
+    const range = selectCompactableRange(session, measurement, retained);
+    if (range === null) return this.log("midtask: no compactable range; nothing replaced");
+
+    this.midAttempts.set(agent, { at: Date.now(), tokens: measurement.totalTokens });
+    this.running.add(agent);
+    const startedAt = Date.now();
+    writeStatus(session.id, {
+      phase: "running",
+      step: "prepare",
+      startedAt,
+      totalTokens: measurement.totalTokens,
+      thresholdTokens: contextWindow - trigger,
+      contextWindow,
+      midTask: true,
+      midTaskTriggerTokens: trigger,
+      timeoutMs: this.handoff.timeoutMs,
+      retrying: false,
+      writing: false,
+      missingSections: [],
+      error: "",
+      errorCode: "",
+      failureHint: null,
+    });
+    this.decisions.set(agent, {
+      at: startedAt,
+      thresholdTokens: contextWindow - trigger,
+      contextWindow,
+      ratio: undefined,
+    });
+    try {
+      const timeout = AbortSignal.timeout(this.handoff.timeoutMs);
+      const operationSignal = signal === undefined || typeof AbortSignal.any !== "function"
+        ? (signal ?? timeout)
+        : AbortSignal.any([signal, timeout]);
+      const result = await this.compactRegion(range.start, range.end, agent, operationSignal);
+      const shadowedNodes = Array.isArray(result?.shadowedSeqs) ? result.shadowedSeqs.length : 0;
+      const shadowedTokens = typeof result?.shadowedTokenCount === "number" ? result.shadowedTokenCount : 0;
+      writeStatus(session.id, {
+        phase: "done",
+        step: "done",
+        completedAt: Date.now(),
+        shadowedNodes,
+        shadowedTokens,
+        missingSections: [],
+        retrying: false,
+        writing: false,
+        midTask: true,
+      });
+      if (result !== null && result !== undefined) this.recordHistory(agent, startedAt, "auto", measurement.totalTokens, result);
+      this.log(`midtask committed: replaced ${shadowedNodes} node(s) (~${shadowedTokens} tokens); the turn continues`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      writeStatus(session.id, {
+        phase: "failed",
+        step: "failed",
+        failedAt: Date.now(),
+        error: message,
+        errorCode: errorCodeOf(error),
+        midTask: true,
+      });
+      this.log(`midtask failed: ${message}`, "warn");
+      // Forced compaction also ran out of room: the trigger itself is too
+      // small for this model, so the dialog asks for a larger one.
+      await this.writeFailureHint(agent, error, measurement.totalTokens, contextWindow, "raise-trigger");
+    } finally {
+      this.running.delete(agent);
+    }
+  }
+
+  /**
+   * Record why a compaction could not fit so the UI can explain it with the
+   * user's real window and usage. Silently skipped when the failure is
+   * unrelated to headroom or the routed model has no known capacity.
+   */
+  async writeFailureHint(agent, error, totalTokens, contextWindow, forcedKind) {
+    if (!isHeadroomFailure(error)) return;
+    const session = agent?.session;
+    if (!session || !Number.isFinite(totalTokens)) return;
+    let window = Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : undefined;
+    if (window === undefined) {
+      const target = this.routedTarget(agent);
+      if (target === undefined) return;
+      try {
+        const info = await this.ctx.llm.resolveModelInfo(target.provider, target.model);
+        window = info.context?.contextWindow;
+      } catch {
+        return;
+      }
+    }
+    if (!Number.isFinite(window) || window <= 0) return;
+    const live = readSettings();
+    const kind = forcedKind ?? (live?.midTaskEnabled === true ? "raise-trigger" : "enable-midtask");
+    // Only a genuinely tight window deserves the dialog: a "summary is not
+    // smaller" failure on a short history must stay quiet.
+    const remaining = window - totalTokens;
+    const trigger = midTaskTriggerTokens(live, window);
+    if (kind === "enable-midtask" && remaining > MIN_MID_TASK_TRIGGER) return;
+    if (kind === "raise-trigger" && remaining > trigger + 8_000) return;
+    const hint = buildFailureHint({
+      kind,
+      totalTokens,
+      contextWindow: window,
+      triggerTokens: midTaskTriggerTokens(live, window),
+    });
+    writeStatus(session.id, { failureHint: hint, midTask: forcedKind !== undefined });
+    this.log(`failure hint: ${kind} used=${hint.usedTokens}/${hint.windowTokens} needed=${hint.neededTokens} suggest=${hint.suggestTokens}`);
   }
 
   /**
@@ -524,6 +801,7 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       missingSections: [],
       error: "",
       errorCode: "",
+      failureHint: null,
     });
     try {
       const result = await super.compactNow(agent, signal, sourceCommandId);
@@ -549,6 +827,9 @@ export default class HandoffCompaction extends BasicCompactionEngine {
         error: message,
         errorCode: errorCodeOf(error),
       });
+      // Manual /compact at the very end of a window fails the same way; the
+      // hint lets the user enable the mid-task switch instead of guessing.
+      await this.writeFailureHint(agent, error, totalTokens, undefined);
       throw error;
     }
   }

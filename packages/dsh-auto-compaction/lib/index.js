@@ -93,6 +93,7 @@ let lastOpenRequest = "";
 
 const DISPLAY_STYLES = new Set(["orbit", "strip", "ring", "topbar", "corner"]);
 const MIN_SUMMARY_TOKENS = 8192;
+const MIN_MID_TASK_TRIGGER = 20000;
 const FALLBACK_SUMMARY_TOKENS = 20000;
 
 function normalizeDisplayStyle(value) {
@@ -290,11 +291,38 @@ function sanitize(payload) {
     displayStyle: normalizeDisplayStyle(payload?.displayStyle),
     timelineEnabled: payload?.timelineEnabled !== false,
     timelinePosition: normalizeTimelinePosition(payload?.timelinePosition),
+    midTaskEnabled: payload?.midTaskEnabled === true,
+    suppressFailureHint: payload?.suppressFailureHint === true,
   };
   // Absent/blank means "follow the row default", so the key is dropped rather
   // than pinning a number that would outlive a future row change.
   if (Number.isInteger(cap) && cap >= MIN_SUMMARY_TOKENS) next.summaryMaxTokens = cap;
+  // The engine clamps this to the live model window; the floor matches the
+  // settings page so a hand-edited smaller value cannot make it a no-op.
+  const midTokens = Number(payload?.midTaskTriggerTokens);
+  if (Number.isInteger(midTokens) && midTokens >= MIN_MID_TASK_TRIGGER) next.midTaskTriggerTokens = midTokens;
+  const clearedAt = Number(payload?.hintClearedAt);
+  if (Number.isFinite(clearedAt) && clearedAt > 0) next.hintClearedAt = Math.floor(clearedAt);
   return next;
+}
+
+/** Stored settings in the shape sanitize() expects (ratio as percent). */
+function settingsPayload(stored) {
+  return {
+    enabled: stored?.enabled !== false,
+    thresholdRatio: (Number(stored?.thresholdRatio) || 0.9) * 100,
+    scope: stored?.scope,
+    presets: stored?.presets,
+    templateFile: stored?.templateFile,
+    displayStyle: stored?.displayStyle,
+    timelineEnabled: stored?.timelineEnabled,
+    timelinePosition: stored?.timelinePosition,
+    summaryMaxTokens: stored?.summaryMaxTokens,
+    midTaskEnabled: stored?.midTaskEnabled,
+    midTaskTriggerTokens: stored?.midTaskTriggerTokens,
+    suppressFailureHint: stored?.suppressFailureHint,
+    hintClearedAt: stored?.hintClearedAt,
+  };
 }
 
 export function apply(ctx, config = {}) {
@@ -380,6 +408,26 @@ export function apply(ctx, config = {}) {
             // No rewriting of preset files: the engine applies the switch and
             // the scope per preset at decision time, so a save is live at the
             // next idle check and uninstalling still leaves nothing behind.
+            return { ok: true, value: { ...next, defaultTemplate: TEMPLATE_FILE, defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS } };
+          }
+          if (endpoint === "fix" || endpoint === "ackHint") {
+            // One-click repair from the failure dialog. Merged into the stored
+            // settings so the dialog never overwrites fields it does not own.
+            const stored = readSettings() ?? seeded;
+            const patch = settingsPayload(stored);
+            if (endpoint === "fix") {
+              patch.midTaskEnabled = true;
+              const tokens = Number(payload?.tokens);
+              if (payload?.action === "raise" && Number.isInteger(tokens) && tokens >= MIN_MID_TASK_TRIGGER) {
+                patch.midTaskTriggerTokens = tokens;
+              }
+            } else if (payload?.suppress === true) {
+              patch.suppressFailureHint = true;
+            }
+            patch.hintClearedAt = Date.now();
+            const next = sanitize(patch);
+            trace(endpoint + " " + JSON.stringify({ action: payload?.action, tokens: payload?.tokens, suppress: payload?.suppress }));
+            writeSettings(ctx, next);
             return { ok: true, value: { ...next, defaultTemplate: TEMPLATE_FILE, defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS } };
           }
           if (endpoint === "scope") {

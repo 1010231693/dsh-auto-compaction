@@ -42,15 +42,26 @@ export class BlockAssembler {
   blocks() { return this._blocks; }
 }
 `);
+stub("@deepseek-ai/dsh-compaction", "index.js", `
+export function toolPairingBalancedBefore() { return true; }
+export function toolPairingBalancedAfter() { return true; }
+`);
 stub("@deepseek-ai/dsh-compaction-basic", "index.js", `
 export default class BasicCompactionEngine {
   constructor(ctx, config) { this.ctx = ctx; this.config = { thresholdRatio: 0.9, headroomTokens: 0, maxTokens: 8192, ...config }; this.calls = []; this.native = []; }
   async compactNow(agent, signal) {
     this.calls.push({ agent, hasSignal: !!(signal && typeof signal.aborted === "boolean") });
+    if (this.failCompact) throw new Error("manual compaction could not produce a smaller summary");
     // History cases need the real order: summarize runs inside the transaction
     // after the engine has cleared the previous payload.
     if (this.summarizeOnCompact) await this.summarize({ messages: [{ role: "user", content: "OLD" }] }, agent, signal);
     return { shadowedSeqs: ["s1", "s2"], shadowedTokenCount: 36_500 };
+  }
+  async compactRegion(start, end, agent, signal) {
+    this.regions = this.regions || [];
+    this.regions.push({ start, end });
+    await this.summarize({ messages: [{ role: "user", content: "OLD" }] }, agent, signal);
+    return { shadowedSeqs: ["r1", "r2"], shadowedTokenCount: 30_000 };
   }
   async compactIfNeeded(agent, trigger) { this.native.push(trigger); return { shadowedSeqs: ["n1"], shadowedTokenCount: 1_000 }; }
   async summarize() { this.native.push("summarize"); return { summary: [{ type: "text", text: "NATIVE SUMMARY" }], provider: "qwen", model: "native" }; }
@@ -59,6 +70,8 @@ export default class BasicCompactionEngine {
 
 write(TEMPLATE, "## ok\n\n写一份交接文档，供下一轮继续。\n");
 write(TWO_SECTION_TEMPLATE, "## 用户目标与原始要求\n\n## 当前任务状态\n\nWrite both sections.\n");
+const FLAT_TEMPLATE = path.join(SANDBOX, "template-flat.md");
+write(FLAT_TEMPLATE, "写一份交接文档，供下一轮继续。只输出正文，不要调用工具，也不要执行任何其他动作。\n");
 process.env.DSH_HANDOFF_SETTINGS_FILE = path.join(SANDBOX, "settings-missing.json");
 process.env.DSH_HANDOFF_TEMPLATE = TEMPLATE;
 process.env.DSH_HANDOFF_STATUS_DIR = path.join(SANDBOX, "status");
@@ -66,7 +79,7 @@ process.env.DSH_HANDOFF_HISTORY_DIR = path.join(SANDBOX, "history");
 process.env.DSH_HANDOFF_TRACE_FILE = path.join(SANDBOX, "trace.log");
 const { default: HandoffCompaction } = await import(pathToFileURL(path.join(SANDBOX, "lib", "index.js")).href);
 
-function makeCtx({ totalTokens, contextWindow = 250_000, defaultMaxTokens = 20_000 }) {
+function makeCtx({ totalTokens, contextWindow = 250_000, defaultMaxTokens = 20_000, nodes }) {
   const handlers = {};
   const logs = [];
   const ctx = {
@@ -74,7 +87,7 @@ function makeCtx({ totalTokens, contextWindow = 250_000, defaultMaxTokens = 20_0
       info: (m) => logs.push(["info", m]),
       warn: (m) => logs.push(["warn", m]),
     },
-    tokenMeter: { measure: () => ({ totalTokens, nodes: [] }) },
+    tokenMeter: { measure: () => ({ totalTokens, nodes: nodes ?? [] }) },
     llm: {
       resolveModelInfo: async () => ({ context: { contextWindow }, defaultMaxTokens }),
       stream: async function* () { yield { text: "## 用户目标与原始要求\n- x" }; },
@@ -478,6 +491,115 @@ test("summary cap: settings override wins, row maxTokens next, 20000 last", asyn
   await live.summarize({ messages: [{ role: "user", content: "OLD" }] }, makeAgent());
   if (seen.maxTokens !== 16000) throw new Error("stream cap: " + seen.maxTokens);
   fs.rmSync(SETTINGS, { force: true });
+});
+
+/* ---- forced mid-turn compaction ---- */
+
+const SURFACE = ["s0", "s1", "s2", "s3", "s4"];
+let settingsTick = Date.now() - 600_000;
+
+/** Write live settings with a strictly increasing mtime so the engine's cache reloads. */
+function writeLiveSettings(value) {
+  settingsTick += 5_000;
+  fs.writeFileSync(SETTINGS, JSON.stringify(value));
+  fs.utimesSync(SETTINGS, new Date(settingsTick), new Date(settingsTick));
+}
+
+function midCtx(totalTokens, perNode = 50_000, surface = SURFACE) {
+  return makeCtx({ totalTokens, nodes: surface.map((seq) => ({ seq, tokens: perNode })) });
+}
+
+function midAgent(surface = SURFACE) {
+  const agent = makeAgent();
+  agent.session.surface = { nodes: surface.slice() };
+  agent.session.eventAt = () => ({ type: "assistant/message" });
+  return agent;
+}
+
+function runPreStep(ctx, agent) {
+  return ctx.handlers["agent/pre-step"][0]({ agent, signal: undefined }, async () => undefined);
+}
+
+const readLiveStatus = () => JSON.parse(fs.readFileSync(path.join(SANDBOX, "status", "session-test.json"), "utf8"));
+
+test("midtask: fires when remaining tokens reach the trigger", async () => {
+  fs.rmSync(SETTINGS, { force: true });
+  writeLiveSettings({ midTaskEnabled: true, midTaskTriggerTokens: 20_000 });
+  const ctx = midCtx(230_000);
+  const plugin = new HandoffCompaction(ctx, {
+    contextWindowOverride: 250_000,
+    reservedCompletionTokensOverride: 20_000,
+    templateFile: FLAT_TEMPLATE,
+    minIntervalMs: 1,
+  });
+  await runPreStep(ctx, midAgent());
+  if (!plugin.regions || plugin.regions.length !== 1) throw new Error("compactRegion not called");
+  if (plugin.regions[0].start !== "s0") throw new Error("range start: " + plugin.regions[0].start);
+  const status = readLiveStatus();
+  if (status.midTask !== true || status.phase !== "done") throw new Error("status: " + JSON.stringify(status));
+  if (status.failureHint) throw new Error("unexpected failure hint");
+  if (!status.shadowedNodes) throw new Error("shadow counts missing");
+});
+
+test("midtask: stays inert while the switch is off", async () => {
+  fs.rmSync(SETTINGS, { force: true });
+  const ctx = midCtx(249_000);
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 250_000, templateFile: FLAT_TEMPLATE });
+  await runPreStep(ctx, midAgent());
+  if (plugin.regions && plugin.regions.length > 0) throw new Error("compacted while disabled");
+});
+
+test("midtask: waits while remaining headroom is above the trigger", async () => {
+  fs.rmSync(SETTINGS, { force: true });
+  writeLiveSettings({ midTaskEnabled: true, midTaskTriggerTokens: 20_000 });
+  const ctx = midCtx(200_000);
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 250_000, templateFile: FLAT_TEMPLATE });
+  await runPreStep(ctx, midAgent());
+  if (plugin.regions && plugin.regions.length > 0) throw new Error("fired too early");
+});
+
+test("midtask: a headroom failure writes the raise-trigger hint", async () => {
+  fs.rmSync(SETTINGS, { force: true });
+  writeLiveSettings({ midTaskEnabled: true, midTaskTriggerTokens: 20_000 });
+  const ctx = midCtx(230_000);
+  ctx.llm.stream = async function* () {
+    const error = new Error("model context window exceeded");
+    error.code = "CONTEXT_WINDOW_EXCEEDED";
+    throw error;
+  };
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 250_000, templateFile: FLAT_TEMPLATE, minIntervalMs: 1 });
+  await runPreStep(ctx, midAgent());
+  const status = readLiveStatus();
+  if (status.phase !== "failed") throw new Error("status not failed: " + JSON.stringify(status));
+  const hint = status.failureHint;
+  if (!hint || hint.kind !== "raise-trigger") throw new Error("hint: " + JSON.stringify(hint));
+  if (hint.windowTokens !== 250_000 || hint.usedTokens !== 230_000 || hint.remainingTokens !== 20_000) {
+    throw new Error("hint numbers: " + JSON.stringify(hint));
+  }
+  if (hint.suggestTokens !== 40_000) throw new Error("suggestion: " + hint.suggestTokens);
+});
+
+test("idle failure with the switch off writes the enable-midtask hint", async () => {
+  fs.rmSync(SETTINGS, { force: true });
+  const ctx = midCtx(245_000);
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 250_000, templateFile: FLAT_TEMPLATE });
+  plugin.failCompact = true;
+  let threw = false;
+  try { await plugin.compactNow(midAgent(), AbortSignal.timeout(5_000)); } catch { threw = true; }
+  if (!threw) throw new Error("expected the transaction to fail");
+  const hint = readLiveStatus().failureHint;
+  if (!hint || hint.kind !== "enable-midtask") throw new Error("hint: " + JSON.stringify(hint));
+  if (hint.remainingTokens !== 5_000 || hint.windowTokens !== 250_000) throw new Error("hint numbers: " + JSON.stringify(hint));
+});
+
+test("midtask: a later compaction clears the stale hint", async () => {
+  writeLiveSettings({ midTaskEnabled: true, midTaskTriggerTokens: 20_000 });
+  const ctx = midCtx(245_000);
+  const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 250_000, templateFile: FLAT_TEMPLATE, minIntervalMs: 1 });
+  await runPreStep(ctx, midAgent());
+  const status = readLiveStatus();
+  if (status.phase !== "done") throw new Error("status: " + JSON.stringify(status));
+  if (status.failureHint) throw new Error("hint not cleared: " + JSON.stringify(status.failureHint));
 });
 
 fs.rmSync(SETTINGS, { force: true });

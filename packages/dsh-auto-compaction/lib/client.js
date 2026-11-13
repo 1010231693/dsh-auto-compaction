@@ -65,6 +65,10 @@ window.__ModuleLoader__.load({
       { id: "corner", label: "右上角" },
     ];
     var EXAMPLE_WINDOW = 250000, EXAMPLE_RESERVED = 20000, EXAMPLE_HEADROOM = 10000;
+    // The engine clamps this to half of the live model window; the settings
+    // page can only show the example, never a hard-coded per-model ceiling.
+    var MID_TASK_MIN_TRIGGER = 20000;
+    var MID_TASK_EXAMPLE_MAX = EXAMPLE_WINDOW / 2;
 
     var DISPLAY_STYLES = ["orbit", "strip", "ring", "topbar", "corner"];
     var displayStyle = "orbit";
@@ -612,6 +616,232 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * Failure dialog centered in the conversation area.
+     *
+     * The engine writes `failureHint` into the status sidecar with the live
+     * numbers (used / window / remaining / needed / suggestion). Two cases:
+     * the switch is off and the idle compaction ran too late, or it is on but
+     * the trigger was still too small. Both offer the one-click repair, and the
+     * checkbox maps to the 压缩失败提示 switch in the settings page.
+     */
+    function FailureHint(props) {
+      ensureStatusStyles();
+      var connection = props.connection;
+      var sessionId = props.sessionId;
+      var hintState = React.useState(null);
+      var hint = hintState[0], setHint = hintState[1];
+      var prefsState = React.useState(null);
+      var prefs = prefsState[0], setPrefs = prefsState[1];
+      var closedState = React.useState(0);
+      var closedAt = closedState[0], setClosedAt = closedState[1];
+      var noAskState = React.useState(false);
+      var noAsk = noAskState[0], setNoAsk = noAskState[1];
+      var busyState = React.useState(false);
+      var busy = busyState[0], setBusy = busyState[1];
+
+      React.useEffect(function () {
+        if (!connection || !sessionId) return undefined;
+        var alive = true;
+        var timer;
+        function poll() {
+          fetchStatus(connection, sessionId).then(function (value) {
+            if (!alive) return;
+            setHint(value && value.failureHint ? value.failureHint : null);
+          }).catch(function () { /* keep the previous hint */ });
+          timer = setTimeout(poll, 4000);
+        }
+        poll();
+        return function () { alive = false; if (timer !== undefined) clearTimeout(timer); };
+      }, [connection, sessionId]);
+
+      React.useEffect(function () {
+        if (!connection) { setPrefs({}); return undefined; }
+        var alive = true;
+        call(connection, "get").then(function (value) {
+          if (alive) setPrefs(value && typeof value === "object" ? value : {});
+        }).catch(function () { if (alive) setPrefs({}); });
+        return function () { alive = false; };
+      }, [connection, hint === null ? 0 : Number(hint.at || 0)]);
+
+      if (hint === null || hint === undefined || prefs === null) return null;
+      if (prefs.suppressFailureHint === true) return null;
+      if (Number(hint.at || 0) <= Number(prefs.hintClearedAt || 0)) return null;
+      if (closedAt !== 0 && closedAt === hint.at) return null;
+
+      var used = Math.max(0, Number(hint.usedTokens) || 0);
+      var windowTokens = Math.max(1, Number(hint.windowTokens) || 1);
+      var remaining = Math.max(0, Number(hint.remainingTokens) || 0);
+      var needed = Math.max(0, Number(hint.neededTokens) || 0);
+      var trigger = Number(hint.triggerTokens) > 0 ? Number(hint.triggerTokens) : MID_TASK_MIN_TRIGGER;
+      var suggest = Number(hint.suggestTokens) > 0 ? Number(hint.suggestTokens) : trigger;
+      var raising = hint.kind === "raise-trigger";
+      var usedPct = Math.min(100, used / windowTokens * 100);
+
+      // Centered on the whole DSH window, not the conversation column: the
+      // scrim covers the sidebar too, so the dialog reads as an app-level
+      // notice rather than a message inside the chat.
+      function finish(value) {
+        setPrefs(value && typeof value === "object" ? value : prefs);
+        setClosedAt(hint.at);
+        setBusy(false);
+      }
+      function repair() {
+        if (busy) return;
+        setBusy(true);
+        call(connection, "fix", raising
+          ? { action: "raise", tokens: suggest }
+          : { action: "enable", tokens: MID_TASK_MIN_TRIGGER }, 6000)
+          .then(finish)
+          .catch(function () { setBusy(false); });
+      }
+      function close() {
+        setClosedAt(hint.at);
+        call(connection, "ackHint", { suppress: noAsk === true }, 5000)
+          .then(function (value) { if (value && typeof value === "object") setPrefs(value); })
+          .catch(function () { /* closed locally regardless */ });
+      }
+
+      var card = {
+        width: "min(492px, 100%)",
+        boxSizing: "border-box",
+        background: STATUS_SURFACE,
+        border: "1px solid " + STATUS_BORDER,
+        borderRadius: 16,
+        boxShadow: "0 18px 52px rgba(0,0,0,.45)",
+        color: STATUS_TEXT,
+        padding: "18px 20px 16px",
+        maxHeight: "calc(100% - 24px)",
+        overflowY: "auto",
+      };
+      var titleStyle = { margin: 0, fontSize: 14.5, fontWeight: 600, lineHeight: "20px" };
+      var subStyleDialog = { marginTop: 2, fontSize: 12, color: STATUS_MUTED };
+      var para = { margin: "0 0 9px", fontSize: 12.5, lineHeight: 1.75, color: STATUS_MUTED };
+      var strong = { color: STATUS_TEXT, fontWeight: 600, fontVariantNumeric: "tabular-nums" };
+      var cause = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 11px", fontSize: 12, background: "rgba(127,133,140,.10)" };
+      var causeValue = { color: STATUS_TEXT, fontWeight: 600, fontVariantNumeric: "tabular-nums", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 11.5 };
+
+      return ReactDOM.createPortal(
+        h("div", {
+          role: "dialog",
+          "aria-modal": "true",
+          "aria-label": raising ? "中途压缩失败" : "交接文档生成失败",
+          "data-dsh-handoff-hint": hint.kind || "enable-midtask",
+          style: {
+            position: "fixed", inset: 0,
+            zIndex: 90, display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 24, boxSizing: "border-box", background: "rgba(8,10,14,.42)",
+          },
+        },
+          h("div", { style: card },
+            h("div", { style: { display: "flex", alignItems: "flex-start", gap: 12 } },
+              h("span", {
+                "aria-hidden": true,
+                style: {
+                  flex: "0 0 auto", width: 30, height: 30, borderRadius: 9, display: "flex",
+                  alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700,
+                  background: raising ? "rgba(210,153,34,.16)" : "rgba(229,83,75,.14)",
+                  color: raising ? STATUS_WARN : STATUS_ERROR,
+                  boxShadow: "inset 0 0 0 1px " + (raising ? "rgba(210,153,34,.38)" : "rgba(229,83,75,.32)"),
+                },
+              }, "!"),
+              h("div", { style: { flex: "1 1 auto", minWidth: 0 } },
+                h("h3", { style: titleStyle }, raising ? "中途压缩也失败了" : "交接文档生成失败"),
+                h("div", { style: subStyleDialog }, raising ? "触发余量偏小，压缩请求放不下" : "上下文余量不足，历史未改动")
+              ),
+              h("button", {
+                type: "button", onClick: close, "aria-label": "关闭",
+                style: { border: 0, background: "transparent", color: STATUS_FAINT, fontSize: 17, lineHeight: "20px", width: 22, height: 22, padding: 0, cursor: "pointer" },
+              }, "×")
+            ),
+
+            h("div", { style: { marginTop: 13 } },
+              raising
+                ? h("p", { style: para },
+                  "「任务中途压缩」已经开启，但触发余量只有 ", h("span", { style: strong }, fmt(trigger)),
+                  "，而这次压缩请求实际需要约 ", h("span", { style: strong }, fmt(needed)),
+                  "（含思考、摘要输出与工具定义），仍然没放下。")
+                : h("p", { style: para },
+                  "这一轮结束时上下文已用到 ", h("span", { style: strong }, fmt(used) + " / " + fmt(windowTokens)),
+                  " tokens，只剩 ", h("span", { style: strong }, fmt(remaining)),
+                  "。写交接文档本身还要思考并生成摘要（约需 ", h("span", { style: strong }, fmt(needed)),
+                  "），请求放不下，所以这次压缩没有执行，历史保持原样。"),
+
+              h("div", { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", fontSize: 11, color: STATUS_MUTED, margin: "10px 0 6px" } },
+                h("span", null, "已用 " + fmt(used) + " / " + fmt(windowTokens)),
+                h("span", { style: { color: raising ? STATUS_WARN : STATUS_ERROR, fontWeight: 600 } }, "余量 " + fmt(remaining))
+              ),
+              h("div", { style: { position: "relative", display: "flex", height: 22, border: "1px solid " + STATUS_BORDER, borderRadius: 6, overflow: "hidden", background: "rgba(127,133,140,.12)" } },
+                h("div", { style: { width: usedPct.toFixed(2) + "%", background: "linear-gradient(90deg, rgba(76,141,255,.18), rgba(76,141,255,.40))" } }),
+                h("div", { style: { flex: "1 1 auto", background: raising ? "repeating-linear-gradient(135deg, rgba(229,83,75,.20) 0 5px, transparent 5px 10px)" : "transparent", borderLeft: "1px solid " + (raising ? STATUS_ERROR : STATUS_BORDER) } })
+              ),
+
+              h("div", { style: { marginTop: 12, border: "1px solid " + STATUS_BORDER, borderRadius: 10, overflow: "hidden" } },
+                h("div", { style: cause },
+                  h("span", null, "已用上下文"),
+                  h("span", { style: causeValue }, fmt(used) + " / " + fmt(windowTokens))
+                ),
+                h("div", { style: Object.assign({}, cause, { borderTop: "1px solid " + STATUS_BORDER }) },
+                  h("span", null, raising ? "当前触发余量" : "压缩请求可用余量"),
+                  h("span", { style: Object.assign({}, causeValue, { color: STATUS_ERROR }) }, fmt(raising ? trigger : remaining))
+                ),
+                h("div", { style: Object.assign({}, cause, { borderTop: "1px solid " + STATUS_BORDER }) },
+                  h("span", null, "思考 + 摘要 + 输出预留"),
+                  h("span", { style: causeValue }, "≈ " + fmt(needed))
+                )
+              ),
+
+              h("p", { style: Object.assign({}, para, { marginTop: 11 }) },
+                raising
+                  ? h("span", null, "把触发余量提高到 ", h("span", { style: strong }, fmt(suggest)), "，下次会在余量还够的时候先压缩，再继续当前任务。")
+                  : h("span", null, "开启「任务中途压缩」后，会在每一步开始前检查余量，余量不足就先压缩再继续，不会拖到最后一轮回答结束。")
+              )
+            ),
+
+            h("label", {
+              style: {
+                display: "flex", alignItems: "flex-start", gap: 9, marginTop: 12, padding: "9px 11px",
+                border: "1px solid " + STATUS_BORDER, borderRadius: 9, background: "rgba(127,133,140,.08)", cursor: "pointer",
+              },
+            },
+              h("input", {
+                type: "checkbox", checked: noAsk,
+                onChange: function () { setNoAsk(!noAsk); },
+                style: { width: 14, height: 14, margin: "2px 0 0", flex: "0 0 auto", accentColor: STATUS_ACCENT },
+              }),
+              h("span", { style: { fontSize: 11.5, color: STATUS_MUTED, lineHeight: 1.55 } },
+                "不再提示这类失败",
+                h("span", { style: { display: "block", fontSize: 10.5, color: STATUS_FAINT, marginTop: 1 } }, "可在「设置 → 会话压缩 → 压缩失败提示」重新开启")
+              )
+            ),
+
+            h("div", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 14, flexWrap: "wrap" } },
+              h("button", {
+                type: "button", onClick: repair, disabled: busy,
+                style: {
+                  border: "1px solid transparent", background: STATUS_ACCENT, color: "#fff",
+                  fontSize: 12, fontWeight: 600, padding: "7px 12px", borderRadius: 8,
+                  cursor: busy ? "default" : "pointer", opacity: busy ? 0.7 : 1, whiteSpace: "nowrap",
+                },
+              }, raising ? "把触发余量提高到 " + fmt(suggest) : "启用任务中途压缩"),
+              h("span", { style: { flex: "1 1 auto" } }),
+              h("button", {
+                type: "button", onClick: close, disabled: busy,
+                style: { border: "1px solid transparent", background: "transparent", color: STATUS_FAINT, fontSize: 12, padding: "7px 10px", borderRadius: 8, cursor: "pointer", whiteSpace: "nowrap" },
+              }, raising ? "暂不调整" : "稍后")
+            ),
+
+            h("div", { style: { marginTop: 10, fontSize: 10.5, color: STATUS_FAINT, lineHeight: 1.65 } },
+              raising
+                ? "建议值按当前模型窗口 " + fmt(windowTokens) + " 计算，上限为窗口一半；调整后下一次判断即生效。"
+                : "默认触发余量 " + fmt(MID_TASK_MIN_TRIGGER) + " tokens，可在设置里调整；立即生效，无需重启，也不会改写你的配置文件。"
+            )
+          )
+        ),
+        document.body
+      );
+    }
+
     function ThemePreview(props) {
       var style = normalizeDisplayStyle(props.theme);
       var chatChildren = [
@@ -846,6 +1076,15 @@ window.__ModuleLoader__.load({
       if (n < 60000) return (n / 1000).toFixed(1) + " s";
       var total = Math.round(n / 1000);
       return Math.floor(total / 60) + " m " + two(total % 60) + " s";
+    }
+    /** Total words shown on the timeline: Chinese characters plus English words. */
+    function wordCount(event) {
+      var cjk = Number(event.cjk);
+      var words = Number(event.words);
+      if (Number.isFinite(cjk) || Number.isFinite(words)) {
+        return (Number.isFinite(cjk) ? cjk : 0) + (Number.isFinite(words) ? words : 0);
+      }
+      return Number(event.summaryChars) || 0;
     }
     function wordText(event) {
       var cjk = Number(event.cjk);
@@ -1091,7 +1330,7 @@ window.__ModuleLoader__.load({
             style: { top: (off + eh / 2) + "px", height: Math.max(0, (n - 1) * pitch) + "px" },
           }),
           ordered.map(function (event, i) {
-            var chars = Number(event.cjk) || Number(event.summaryChars) || 0;
+            var chars = wordCount(event);
             var bead = Math.max(4, Math.min(6 + Math.round(chars / 220), labels ? 12 : Math.max(4, Math.floor(pitch) - 2)));
             return h("button", {
               key: String(event.startedAt || i),
@@ -1122,7 +1361,6 @@ window.__ModuleLoader__.load({
         var ringSize = 84, ringR = ringSize / 2 - 7;
         var ringC = 2 * Math.PI * ringR, ringCenter = ringSize / 2;
         var filled = pctValue === null ? 0 : Math.max(0, Math.min(100, pctValue));
-        var attempts = Array.isArray(active.attempts) ? active.attempts : [];
         var ring = h("figure", { className: "dsh-tl-ring" },
           h("svg", { viewBox: "0 0 " + ringSize + " " + ringSize, width: ringSize, height: ringSize, "aria-hidden": "true" },
             h("circle", { cx: ringCenter, cy: ringCenter, r: ringR, fill: "none", stroke: "rgba(241,75,11,.18)", strokeWidth: 7 }),
@@ -1136,13 +1374,12 @@ window.__ModuleLoader__.load({
         );
 
         var rows = [
-          ["压缩用时", durationText(active.durationMs) + (Number(active.summaryMs) > 0 ? "（摘要 " + durationText(active.summaryMs) + "）" : "")],
+          ["压缩用时", durationText(active.durationMs)],
           ["触发方式", active.trigger === "manual" ? "手动 /compact" : "自动（空闲时）"],
           ["交接文档", wordText(active)],
           ["摘要输出", Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
           ["替换历史", (fmt(Number(active.shadowedNodes) || 0) + " 条 / " + fmt(Number(active.shadowedTokens) || 0) + " tokens")],
-          ["闸门", String(attempts.length || 1) + " 次 · 缺失 0 节"],
-          ["模型", [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
+            ["模型", [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
         ];
 
         modal = h("div", {
@@ -1198,7 +1435,7 @@ window.__ModuleLoader__.load({
         var style = document.createElement("style");
         style.id = COMPACTION_TAB_STYLE_ID;
         style.textContent = [
-          ".dsh-ct{flex:1;min-height:0;height:100%;display:grid;grid-template-columns:282px minmax(0,1fr);",
+          ".dsh-ct{flex:1;min-height:0;height:100%;overflow:hidden;display:grid;grid-template-columns:282px minmax(0,1fr);",
           "font-family:var(--dsh-font-sans,system-ui,'Segoe UI','Microsoft YaHei',sans-serif)}",
           ".dsh-ct-rail{border-right:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));padding:16px 14px;overflow:auto;min-height:0}",
           ".dsh-ct-railhead{display:flex;align-items:baseline;justify-content:space-between;margin:0 4px 14px}",
@@ -1219,7 +1456,7 @@ window.__ModuleLoader__.load({
           "box-shadow:0 0 0 4px rgba(241,75,11,.16),0 0 12px rgba(241,75,11,.5)}",
           ".dsh-ct-meta{font-size:10px;line-height:1.5;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary,#88939c)}",
           ".dsh-ct-meta b{font-weight:500;color:var(--dsw-alias-label-primary,#c9d0d8)}",
-          ".dsh-ct-detail{display:flex;flex-direction:column;min-height:0;overflow:auto;padding:18px 22px 22px}",
+          ".dsh-ct-detail{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:18px 22px 22px}",
           ".dsh-ct-detailhead{display:flex;align-items:baseline;gap:10px;margin-bottom:14px}",
           ".dsh-ct-detailtitle{font-size:13.5px;font-weight:600;color:var(--dsw-alias-label-primary,#eaf1f6)}",
           ".dsh-ct-stamp{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:var(--dsw-alias-label-secondary,#88939c)}",
@@ -1228,7 +1465,7 @@ window.__ModuleLoader__.load({
           ".dsh-ct-top .dsh-tl-hero{margin-bottom:0}",
           ".dsh-ct-top .dsh-tl-row{padding:5px 0}",
           ".dsh-ct-detail .dsh-tl-doctitle{margin-top:14px}",
-          ".dsh-ct-detail .dsh-tl-doc{flex:1;min-height:140px}",
+          ".dsh-ct-detail .dsh-tl-doc{flex:1 1 0;min-height:0;overflow:auto}",
           ".dsh-ct-empty{flex:1;min-height:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;",
           "gap:6px;text-align:center;padding:24px;font-size:12.5px;color:var(--dsw-alias-label-secondary,#88939c);",
           "font-family:var(--dsh-font-sans,system-ui,'Segoe UI','Microsoft YaHei',sans-serif)}",
@@ -1288,6 +1525,35 @@ window.__ModuleLoader__.load({
       var palette = accentColor();
       var accent = palette.accent;
 
+      // The host gives the view an auto-height wrapper, so `height:100%` would
+      // grow with the document and scroll the rail/header out of view. Pin the
+      // root to the measured space between the tab bar and the composer; then
+      // only the document pane scrolls.
+      React.useEffect(function () {
+        function fit() {
+          if (typeof document === "undefined") return;
+          var root = document.querySelector("[data-dsh-handoff-compaction-tab]");
+          if (!root) return;
+          var top = root.getBoundingClientRect().top;
+          var bottom = typeof window === "undefined" ? top + 500 : window.innerHeight;
+          var content = document.querySelector("[data-conversation-content]");
+          var box = content && content.getBoundingClientRect();
+          if (box && box.height > 120) bottom = Math.min(bottom, box.bottom);
+          var seat = document.querySelector("[data-composer-seat]");
+          var seatBox = seat && seat.getBoundingClientRect();
+          if (seatBox && seatBox.height > 0) bottom = Math.min(bottom, seatBox.top);
+          var height = Math.max(200, Math.floor(bottom - top));
+          root.style.height = height + "px";
+        }
+        fit();
+        var timer = setTimeout(fit, 120);
+        if (typeof window !== "undefined") window.addEventListener("resize", fit);
+        return function () {
+          clearTimeout(timer);
+          if (typeof window !== "undefined") window.removeEventListener("resize", fit);
+        };
+      }, [events.length, index]);
+
       if (!loaded) {
         return h("div", { className: "dsh-ct-empty" }, h("span", null, "读取压缩记录中…"));
       }
@@ -1309,7 +1575,6 @@ window.__ModuleLoader__.load({
       var ringSize = 84, ringR = ringSize / 2 - 7;
       var ringC = 2 * Math.PI * ringR, ringCenter = ringSize / 2;
       var filled = pctValue === null ? 0 : Math.max(0, Math.min(100, pctValue));
-      var attempts = Array.isArray(active.attempts) ? active.attempts : [];
       var ring = h("figure", { className: "dsh-tl-ring" },
         h("svg", { viewBox: "0 0 " + ringSize + " " + ringSize, width: ringSize, height: ringSize, "aria-hidden": "true" },
           h("circle", { cx: ringCenter, cy: ringCenter, r: ringR, fill: "none", stroke: "rgba(241,75,11,.18)", strokeWidth: 7 }),
@@ -1322,12 +1587,11 @@ window.__ModuleLoader__.load({
         h("figcaption", null, pctValue === null ? "—" : pctValue.toFixed(1) + "%", h("small", null, "占窗口"))
       );
       var rows = [
-        ["压缩用时", durationText(active.durationMs) + (Number(active.summaryMs) > 0 ? "（摘要 " + durationText(active.summaryMs) + "）" : "")],
+        ["压缩用时", durationText(active.durationMs)],
         ["触发方式", active.trigger === "manual" ? "手动 /compact" : "自动（空闲时）"],
         ["交接文档", wordText(active)],
         ["摘要输出", Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
         ["替换历史", (fmt(Number(active.shadowedNodes) || 0) + " 条 / " + fmt(Number(active.shadowedTokens) || 0) + " tokens")],
-        ["闸门", String(attempts.length || 1) + " 次 · 缺失 0 节"],
         ["模型", [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
       ];
 
@@ -1338,7 +1602,7 @@ window.__ModuleLoader__.load({
         ),
         h("div", { className: "dsh-ct-tape" },
           events.map(function (event, i) {
-            var chars = Number(event.cjk) || Number(event.summaryChars) || 0;
+            var chars = wordCount(event);
             var bead = Math.max(6, Math.min(12, 6 + Math.round(chars / 220)));
             return h("button", {
               key: String(event.startedAt || i),
@@ -1443,7 +1707,7 @@ window.__ModuleLoader__.load({
       if (status.loading) return h("div", { style: { color: C.muted, padding: 18, fontSize: 13 } }, "读取设置中…");
       if (status.error && !draft) return h("div", { style: { color: "var(--dsw-alias-state-warn-primary, #e0b341)", padding: 18, fontSize: 13, lineHeight: 1.8 } }, "无法读取设置：" + status.error);
 
-      var base = draft || { enabled: true, thresholdRatio: 0.9, scope: "global", presets: [], templateFile: "", displayStyle: "orbit" };
+      var base = draft || { enabled: true, thresholdRatio: 0.9, scope: "global", presets: [], templateFile: "", displayStyle: "orbit", midTaskEnabled: false, midTaskTriggerTokens: MID_TASK_MIN_TRIGGER, suppressFailureHint: false };
       var enabled = base.enabled !== false;
       var ratio = Math.round((Number(base.thresholdRatio) || 0.9) * 100);
       var scopePreset = base.scope === "preset";
@@ -1453,6 +1717,12 @@ window.__ModuleLoader__.load({
       var themeStyle = normalizeDisplayStyle(base.displayStyle);
       var tlEnabled = base.timelineEnabled !== false;
       var tlPosition = normalizeTimelinePosition(base.timelinePosition);
+      var midEnabled = base.midTaskEnabled === true;
+      var midRaw = Number(base.midTaskTriggerTokens);
+      var midValue = Number.isFinite(midRaw)
+        ? Math.max(MID_TASK_MIN_TRIGGER, Math.min(MID_TASK_EXAMPLE_MAX, Math.floor(midRaw)))
+        : MID_TASK_MIN_TRIGGER;
+      var hintOn = base.suppressFailureHint !== true;
       var capDefaultRaw = Number(base.defaultSummaryMaxTokens);
       var capDefault = Number.isFinite(capDefaultRaw) && capDefaultRaw >= 1 ? Math.floor(capDefaultRaw) : 20000;
       var capText = capDraft === null ? (base.summaryMaxTokens !== undefined ? String(base.summaryMaxTokens) : String(capDefault)) : capDraft;
@@ -1476,6 +1746,11 @@ window.__ModuleLoader__.load({
       var ceiling = budget - EXAMPLE_HEADROOM;
       var eff = Math.min(Math.round(budget * ratio / 100), ceiling);
       var capped = Math.round(budget * ratio / 100) > ceiling;
+      // Water-level illustration for the settings example: used head, the
+      // verbatim tail the selector keeps, and the trigger line.
+      var midUsed = EXAMPLE_WINDOW - midValue;
+      var midUsedPct = midUsed / EXAMPLE_WINDOW * 100;
+      var midTailPct = ((EXAMPLE_WINDOW - EXAMPLE_RESERVED) * 0.16) / EXAMPLE_WINDOW * 100;
       var dirty = settings === null || (settings.enabled !== false) !== enabled ||
         Math.round((settings.thresholdRatio || 0.9) * 100) !== ratio ||
         settings.scope !== base.scope ||
@@ -1484,6 +1759,9 @@ window.__ModuleLoader__.load({
         normalizeDisplayStyle(settings.displayStyle) !== themeStyle ||
         (settings.timelineEnabled !== false) !== tlEnabled ||
         normalizeTimelinePosition(settings.timelinePosition) !== tlPosition ||
+        (settings.midTaskEnabled === true) !== midEnabled ||
+        (Number(settings.midTaskTriggerTokens) || MID_TASK_MIN_TRIGGER) !== midValue ||
+        (settings.suppressFailureHint === true) !== !hintOn ||
         (settings.summaryMaxTokens ?? undefined) !== capValue;
 
       // Every field is read from disk at decision time, so an unsaved edit says
@@ -1498,6 +1776,9 @@ window.__ModuleLoader__.load({
         display: saved !== null && normalizeDisplayStyle(saved.displayStyle) !== themeStyle,
         timeline: saved !== null && (saved.timelineEnabled !== false) !== tlEnabled,
         position: saved !== null && normalizeTimelinePosition(saved.timelinePosition) !== tlPosition,
+        midTask: saved !== null && (saved.midTaskEnabled === true) !== midEnabled,
+        midTrigger: saved !== null && (Number(saved.midTaskTriggerTokens) || MID_TASK_MIN_TRIGGER) !== midValue,
+        hint: saved !== null && (saved.suppressFailureHint === true) !== !hintOn,
         ratio: saved !== null && Math.round((saved.thresholdRatio || 0.9) * 100) !== ratio,
         cap: saved !== null && (saved.summaryMaxTokens ?? undefined) !== capValue,
         template: saved !== null && (saved.templateFile || "") !== template,
@@ -1522,6 +1803,9 @@ window.__ModuleLoader__.load({
           displayStyle: themeStyle,
           timelineEnabled: tlEnabled,
           timelinePosition: tlPosition,
+          midTaskEnabled: midEnabled,
+          midTaskTriggerTokens: midValue,
+          suppressFailureHint: !hintOn,
           summaryMaxTokens: capValue,
         }).then(function (value) {
           setSettings(value); setDraft(value);
@@ -1618,6 +1902,76 @@ window.__ModuleLoader__.load({
             })
           ),
           h(ThemePreview, { theme: themeStyle })
+        ),
+
+        h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
+          h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 } },
+            h("div", { style: { flex: "1 1 auto", minWidth: 0 } },
+              h("div", { style: labelStyle }, "任务中途压缩", pendingTag(pending.midTask || pending.midTrigger)),
+              h("div", { style: subStyle }, midEnabled
+                ? "每一步开始前测一次余量；低于触发余量就先折叠历史，再继续当前任务。"
+                : "默认关闭：只在任务结束后压缩。开启后每一步开始前测一次余量，不足就先压缩再继续。")
+            ),
+            h(ToggleSwitch, {
+              checked: midEnabled,
+              label: "任务中途压缩",
+              onChange: function (value) { patch({ midTaskEnabled: value }); },
+            })
+          ),
+          midEnabled ? h("div", { style: { marginTop: 11 } },
+            h("div", { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", fontSize: 11, color: C.muted, marginBottom: 6 } },
+              h("span", null, "示例窗口 " + fmt(EXAMPLE_WINDOW) + " tokens"),
+              h("span", { style: { color: C.warn, fontWeight: 600 } }, "触发线 · 已用 " + fmt(midUsed))
+            ),
+            h("div", { style: { position: "relative", display: "flex", height: 24, border: "1px solid " + C.line, borderRadius: 7, overflow: "hidden", background: C.field } },
+              h("div", { style: { width: Math.max(0, midUsedPct - midTailPct).toFixed(2) + "%", background: "linear-gradient(90deg, rgba(76,141,255,.20), rgba(76,141,255,.44))", borderRight: "1px solid " + C.accentLine } }),
+              h("div", { style: { width: midTailPct.toFixed(2) + "%", background: "repeating-linear-gradient(135deg, rgba(127,133,140,.22) 0 4px, transparent 4px 9px)" } }),
+              h("div", { style: { flex: "1 1 auto" } }),
+              h("div", { style: { position: "absolute", top: -3, bottom: -3, left: midUsedPct.toFixed(2) + "%", width: 2, background: C.warn, borderRadius: 1 } })
+            ),
+            h("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8, fontSize: 10.5, color: C.faint } },
+              h("span", null, "已用 " + fmt(midUsed)),
+              h("span", null, "逐字保留尾部 ≈ " + fmt(Math.round((EXAMPLE_WINDOW - EXAMPLE_RESERVED) * 0.16))),
+              h("span", null, "触发余量 " + fmt(midValue)),
+              h("span", null, "窗口 " + fmt(EXAMPLE_WINDOW))
+            ),
+            h("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 10 } },
+              h("input", {
+                type: "range",
+                min: MID_TASK_MIN_TRIGGER,
+                max: MID_TASK_EXAMPLE_MAX,
+                step: 1000,
+                value: midValue,
+                "aria-label": "任务中途压缩触发余量",
+                style: { flex: "1 1 auto", maxWidth: 340, accentColor: C.accent },
+                onChange: function (e) { patch({ midTaskTriggerTokens: Number(e.target.value) }); },
+              }),
+              h("span", { style: { fontSize: 12.5, color: C.text, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" } },
+                fmt(midValue),
+                h("span", { style: { color: C.faint, marginLeft: 4, fontSize: 11 } }, "tokens")
+              )
+            ),
+            h("div", { style: { display: "flex", justifyContent: "space-between", maxWidth: 420, fontSize: 10.5, color: C.faint, marginTop: 2 } },
+              h("span", null, "20,000 最低"),
+              h("span", null, fmt(MID_TASK_EXAMPLE_MAX) + " 窗口一半")
+            ),
+            h("div", { style: { marginTop: 8, fontSize: 11.5, color: C.muted, lineHeight: 1.7 } },
+              "剩余 ≤ " + fmt(midValue) + " 时压缩 ≈ 已用 " + fmt(midUsed) + " / " + fmt(EXAMPLE_WINDOW) +
+              "。实际窗口按当前模型读取，上限自动钳到窗口一半；压缩发生在两步之间，不打断任务。")
+          ) : h("div", { style: { marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(210,153,34,.12)", border: "1px solid rgba(210,153,34,.34)", fontSize: 11.5, color: C.muted, lineHeight: 1.65 } },
+            "只等任务结束再压缩，就可能出现「最后一轮几乎用尽窗口、写摘要反而没有余量」的情况；开启本项可把压缩提前到两步之间。")
+        ),
+
+        h("div", { style: rowStyle },
+          h("div", null,
+            h("div", { style: labelStyle }, "压缩失败提示", pendingTag(pending.hint)),
+            h("div", { style: subStyle }, "因余量不足压缩失败时，在窗口中间说明原因，并引导开启或调高「任务中途压缩」；关闭后不再弹窗，失败仍会记入状态。")
+          ),
+          h(ToggleSwitch, {
+            checked: hintOn,
+            label: "压缩失败提示",
+            onChange: function (value) { patch({ suppressFailureHint: !value }); },
+          })
         ),
 
         h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
@@ -1798,6 +2152,10 @@ window.__ModuleLoader__.load({
               h(TimelineDock, {
                 connection: connection,
                 sessionId: slotProps.sessionId,
+              }),
+              h(FailureHint, {
+                connection: connection,
+                sessionId: slotProps.sessionId,
               })
             );
           });
@@ -1847,6 +2205,7 @@ window.__ModuleLoader__.load({
     // Exposed for the structure test: renders the tab view with a fake React.
     exports.CompactionTabView = CompactionTabView;
     exports.Section = Section;
+    exports.FailureHint = FailureHint;
     return module.exports;
   },
 });

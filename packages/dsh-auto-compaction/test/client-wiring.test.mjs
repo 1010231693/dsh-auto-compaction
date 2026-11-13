@@ -8,6 +8,14 @@ import { fileURLToPath } from "node:url";
  * React/ReactDOM stub is enough to load the factory and exercise the wiring.
  * CompactionTabView is exposed by the bundle so its pure render structure can
  * be asserted with a fake React (state queue, no effects, no DOM). */
+globalThis.document = {
+  getElementById: () => null,
+  createElement: () => ({ id: "", textContent: "" }),
+  head: { appendChild: () => {} },
+  querySelector: () => null,
+  body: {},
+};
+
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, "..", "lib", "client.js"), "utf8");
 
@@ -21,7 +29,7 @@ const ReactStub = {
   useEffect: () => {},
   Fragment: "Fragment",
 };
-const ReactDOMStub = { createPortal: () => null };
+const ReactDOMStub = { createPortal: (node) => node };
 const requireStub = (id) => {
   if (id === "react") return ReactStub;
   if (id === "react-dom") return ReactDOMStub;
@@ -151,6 +159,11 @@ test("tab view renders the master-detail layout for a compaction event", () => {
   assert.match(text, /第 1 次压缩/);
   assert.match(text, /30,210 tokens/);
   assert.match(text, /手动 \/compact/);
+  // Timeline word count = CJK characters + English words.
+  assert.match(textOf(rail), /1,364 字/);
+  // The gate row is gone, and the duration no longer repeats the summary time.
+  assert.doesNotMatch(text, /闸门/);
+  assert.doesNotMatch(text, /（摘要/);
 });
 
 const SAVED = {
@@ -205,6 +218,63 @@ test("each unsaved field marks its own title as pending", () => {
     /压缩显示方式（保存后生效）/);
   assert.match(textOf(renderSection(Object.assign({}, SAVED, { summaryMaxTokens: 16000 }))),
     /摘要上限（保存后生效）/);
+});
+
+test("settings section adds the mid-task water-level block", () => {
+  const text = textOf(renderSection(Object.assign({}, SAVED, {
+    midTaskEnabled: true, midTaskTriggerTokens: 40000, suppressFailureHint: false,
+  })));
+  assert.match(text, /任务中途压缩/);
+  assert.match(text, /触发线 · 已用 210,000/);
+  assert.match(text, /40,000/);
+  assert.match(text, /逐字保留尾部 ≈ 36,800/);
+  assert.match(text, /压缩失败提示/);
+});
+
+test("mid-task fields mark their own titles as pending", () => {
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { midTaskEnabled: true }))),
+    /任务中途压缩（保存后生效）/);
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { midTaskTriggerTokens: 40000 }))),
+    /任务中途压缩（保存后生效）/);
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { suppressFailureHint: true }))),
+    /压缩失败提示（保存后生效）/);
+});
+
+const ENABLE_HINT = {
+  kind: "enable-midtask",
+  usedTokens: 245000, windowTokens: 250000, remainingTokens: 5000,
+  neededTokens: 20000, triggerTokens: 20000, suggestTokens: 20000, at: 1000,
+};
+const RAISE_HINT = {
+  kind: "raise-trigger",
+  usedTokens: 230000, windowTokens: 250000, remainingTokens: 20000,
+  neededTokens: 28000, triggerTokens: 20000, suggestTokens: 40000, at: 2000,
+};
+
+function renderHint(hint, prefs) {
+  stateQueue = [hint, prefs, 0, false, false];
+  return api.FailureHint({ connection: {}, sessionId: "s1" });
+}
+
+test("failure hint explains an idle failure with the live numbers", () => {
+  const text = textOf(renderHint(ENABLE_HINT, { midTaskEnabled: false, suppressFailureHint: false }));
+  assert.match(text, /交接文档生成失败/);
+  assert.match(text, /245,000 \/ 250,000/);
+  assert.match(text, /5,000/);
+  assert.match(text, /启用任务中途压缩/);
+  assert.match(text, /不再提示这类失败/);
+});
+
+test("failure hint explains a too-small trigger and offers the raise", () => {
+  const text = textOf(renderHint(RAISE_HINT, { midTaskEnabled: true, suppressFailureHint: false }));
+  assert.match(text, /中途压缩也失败了/);
+  assert.match(text, /28,000/);
+  assert.match(text, /把触发余量提高到 40,000/);
+});
+
+test("failure hint stays hidden when notices are off or already cleared", () => {
+  assert.equal(renderHint(ENABLE_HINT, { suppressFailureHint: true }), null);
+  assert.equal(renderHint(Object.assign({}, RAISE_HINT, { at: 500 }), { hintClearedAt: 1000 }), null);
 });
 
 let failed = 0;
