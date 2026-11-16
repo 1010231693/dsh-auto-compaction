@@ -166,6 +166,19 @@ test("tab view renders the master-detail layout for a compaction event", () => {
   assert.doesNotMatch(text, /（摘要/);
 });
 
+test("mid-task compaction is labelled as mid-turn, not idle", () => {
+  stateQueue = [[Object.assign({}, SAMPLE_EVENT, { trigger: "midtask" })], -1, true];
+  const tree = api.CompactionTabView({ connection: null, sessionId: "s1" });
+  const text = textOf(tree);
+  assert.match(text, /自动（任务中途）/);
+  assert.doesNotMatch(text, /自动（空闲时）/);
+  // The document header carries the two font-size controls.
+  const zoom = findByClass(tree, "dsh-tl-zoom");
+  assert.ok(zoom, "font size controls");
+  assert.equal(zoom.children.length, 2);
+  assert.match(textOf(zoom), /[−+]/);
+});
+
 const SAVED = {
   enabled: true,
   thresholdRatio: 0.9,
@@ -258,7 +271,7 @@ function renderHint(hint, prefs) {
 
 test("failure hint explains an idle failure with the live numbers", () => {
   const text = textOf(renderHint(ENABLE_HINT, { midTaskEnabled: false, suppressFailureHint: false }));
-  assert.match(text, /交接文档生成失败/);
+  assert.match(text, /摘要生成失败/);
   assert.match(text, /245,000 \/ 250,000/);
   assert.match(text, /5,000/);
   assert.match(text, /启用任务中途压缩/);

@@ -532,9 +532,14 @@ test("midtask: fires when remaining tokens reach the trigger", async () => {
     templateFile: FLAT_TEMPLATE,
     minIntervalMs: 1,
   });
+  plugin.historyTriggers = [];
+  plugin.recordHistory = function (agent, startedAt, trigger) { this.historyTriggers.push(trigger); };
   await runPreStep(ctx, midAgent());
   if (!plugin.regions || plugin.regions.length !== 1) throw new Error("compactRegion not called");
   if (plugin.regions[0].start !== "s0") throw new Error("range start: " + plugin.regions[0].start);
+  if (plugin.historyTriggers.length !== 1 || plugin.historyTriggers[0] !== "midtask") {
+    throw new Error("history trigger: " + plugin.historyTriggers.join(","));
+  }
   const status = readLiveStatus();
   if (status.midTask !== true || status.phase !== "done") throw new Error("status: " + JSON.stringify(status));
   if (status.failureHint) throw new Error("unexpected failure hint");

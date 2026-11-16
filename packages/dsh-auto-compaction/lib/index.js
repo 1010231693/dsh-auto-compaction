@@ -95,9 +95,19 @@ const DISPLAY_STYLES = new Set(["orbit", "strip", "ring", "topbar", "corner"]);
 const MIN_SUMMARY_TOKENS = 8192;
 const MIN_MID_TASK_TRIGGER = 20000;
 const FALLBACK_SUMMARY_TOKENS = 20000;
+const DOC_FONT_MIN = 10;
+const DOC_FONT_MAX = 24;
+const DOC_FONT_DEFAULT = 12;
 
 function normalizeDisplayStyle(value) {
   return typeof value === "string" && DISPLAY_STYLES.has(value) ? value : "orbit";
+}
+
+/** Handoff document font size (px): UI-only, persisted so the choice survives restarts. */
+function normalizeDocFontSize(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size)) return DOC_FONT_DEFAULT;
+  return Math.max(DOC_FONT_MIN, Math.min(DOC_FONT_MAX, Math.round(size)));
 }
 
 function normalize(config) {
@@ -303,6 +313,7 @@ function sanitize(payload) {
   if (Number.isInteger(midTokens) && midTokens >= MIN_MID_TASK_TRIGGER) next.midTaskTriggerTokens = midTokens;
   const clearedAt = Number(payload?.hintClearedAt);
   if (Number.isFinite(clearedAt) && clearedAt > 0) next.hintClearedAt = Math.floor(clearedAt);
+  if (payload?.docFontSize !== undefined) next.docFontSize = normalizeDocFontSize(payload.docFontSize);
   return next;
 }
 
@@ -322,6 +333,7 @@ function settingsPayload(stored) {
     midTaskTriggerTokens: stored?.midTaskTriggerTokens,
     suppressFailureHint: stored?.suppressFailureHint,
     hintClearedAt: stored?.hintClearedAt,
+    docFontSize: stored?.docFontSize,
   };
 }
 
@@ -396,19 +408,34 @@ export function apply(ctx, config = {}) {
                 displayStyle: normalizeDisplayStyle(stored.displayStyle),
                 timelineEnabled: stored.timelineEnabled !== false,
                 timelinePosition: normalizeTimelinePosition(stored.timelinePosition),
+                docFontSize: normalizeDocFontSize(stored.docFontSize),
                 defaultTemplate: TEMPLATE_FILE,
                 defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS,
               },
             };
           }
           if (endpoint === "set") {
-            const next = sanitize(payload);
+            // The settings page owns every field except the document font
+            // size, which is adjusted from the timeline; carrying the stored
+            // value keeps a save from silently resetting it.
+            const next = sanitize({ ...settingsPayload(readSettings() ?? {}), ...payload });
             trace("set " + JSON.stringify(next));
             writeSettings(ctx, next);
             // No rewriting of preset files: the engine applies the switch and
             // the scope per preset at decision time, so a save is live at the
             // next idle check and uninstalling still leaves nothing behind.
             return { ok: true, value: { ...next, defaultTemplate: TEMPLATE_FILE, defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS } };
+          }
+          if (endpoint === "pref") {
+            // Single-field UI preference (currently the document font size),
+            // merged into the stored settings so it survives restarts without
+            // the timeline having to replay fields it does not own.
+            const patch = settingsPayload(readSettings() ?? seeded);
+            if (payload?.docFontSize !== undefined) patch.docFontSize = payload.docFontSize;
+            const next = sanitize(patch);
+            trace("pref " + JSON.stringify({ docFontSize: next.docFontSize }));
+            writeSettings(ctx, next);
+            return { ok: true, value: { docFontSize: normalizeDocFontSize(next.docFontSize) } };
           }
           if (endpoint === "fix" || endpoint === "ackHint") {
             // One-click repair from the failure dialog. Merged into the stored

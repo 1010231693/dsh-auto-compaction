@@ -132,6 +132,68 @@ window.__ModuleLoader__.load({
       }).catch(function () { /* keep the current prefs */ });
     }
 
+    /* Handoff document font size: a UI-only display pref persisted in
+     * settings.json. The rule lives in its own <style> element so the chat
+     * modal and the 「压缩」 tab both resize on the next paint, without
+     * re-rendering either surface. */
+    var DOC_FONT_STYLE_ID = "dsh-auto-compaction-doc-font";
+    var DOC_FONT_MIN = 10, DOC_FONT_MAX = 24, DOC_FONT_DEFAULT = 12;
+    var docFontSize = DOC_FONT_DEFAULT;
+    function normalizeDocFontSize(value) {
+      var n = Number(value);
+      if (!Number.isFinite(n)) return DOC_FONT_DEFAULT;
+      return Math.max(DOC_FONT_MIN, Math.min(DOC_FONT_MAX, Math.round(n)));
+    }
+    function applyDocFontSize(value) {
+      docFontSize = normalizeDocFontSize(value);
+      try {
+        if (typeof document === "undefined") return docFontSize;
+        var el = document.getElementById(DOC_FONT_STYLE_ID);
+        if (el === null) {
+          el = document.createElement("style");
+          el.id = DOC_FONT_STYLE_ID;
+          document.head.appendChild(el);
+        }
+        // Both containers outrank the shared `.dsh-tl-doc` base rule no matter
+        // which stylesheet the host appended first.
+        el.textContent = ".dsh-tl-modal .dsh-tl-doc,.dsh-ct-detail .dsh-tl-doc{font-size:" + docFontSize + "px}";
+      } catch (error) { /* styling must never break the timeline */ }
+      return docFontSize;
+    }
+    function persistDocFontSize(connection) {
+      if (!connection || !connection.rpc || typeof connection.rpc.call !== "function") return;
+      call(connection, "pref", { docFontSize: docFontSize }).catch(function () { /* keep the local size */ });
+    }
+    function adjustDocFontSize(connection, delta) {
+      applyDocFontSize(docFontSize + delta);
+      persistDocFontSize(connection);
+      return docFontSize;
+    }
+    function loadDocFontSize(connection) {
+      if (!connection || !connection.rpc || typeof connection.rpc.call !== "function") return;
+      call(connection, "get").then(function (value) {
+        if (value && typeof value === "object" && value.docFontSize !== undefined) applyDocFontSize(value.docFontSize);
+      }).catch(function () { /* keep the default */ });
+    }
+    function docZoomControls(connection) {
+      return h("span", { className: "dsh-tl-zoom" },
+        h("button", {
+          type: "button", className: "dsh-tl-zbtn", title: "缩小摘要字号", "aria-label": "缩小摘要字号",
+          onClick: function () { adjustDocFontSize(connection, -1); },
+        }, "−"),
+        h("button", {
+          type: "button", className: "dsh-tl-zbtn", title: "放大摘要字号", "aria-label": "放大摘要字号",
+          onClick: function () { adjustDocFontSize(connection, 1); },
+        }, "+")
+      );
+    }
+    function docTitle(connection, active) {
+      return h("div", { className: "dsh-tl-doctitle" },
+        h("b", null, "摘要全文"),
+        h("span", { className: "dsh-tl-docmeta" }, h("span", null, wordText(active)), docZoomControls(connection))
+      );
+    }
+
     function clampPercent(raw) {
       var n = Number(raw);
       if (!Number.isFinite(n)) return 0;
@@ -341,7 +403,7 @@ window.__ModuleLoader__.load({
       var progress = statusProgress(status);
       if (view === "running") {
         title = status.retrying
-          ? (status.writing ? "正在从头重写交接文档" : "正在补全交接文档")
+          ? (status.writing ? "正在从头重写摘要" : "正在补全摘要")
           : "正在压缩历史会话";
         var pieces = [];
         if (Number(status.totalTokens) > 0) {
@@ -360,7 +422,7 @@ window.__ModuleLoader__.load({
           : (status.note === "no compactable range" ? "没有需要压缩的历史" : "压缩完成");
         sub = "旧消息仍可用回滚功能恢复";
       } else {
-        title = staleRunning ? "压缩可能已中断（超时）· 历史未改动" : "交接文档生成失败 · 历史未改动";
+        title = staleRunning ? "压缩可能已中断（超时）· 历史未改动" : "摘要生成失败 · 历史未改动";
         if (staleRunning) {
           sub = "下一次空闲会重新尝试";
         } else if (String(status.errorCode || "") === "INCOMPLETE_SUMMARY") {
@@ -540,7 +602,7 @@ window.__ModuleLoader__.load({
               indicator,
               h("div", { style: { fontSize: 12.5, fontWeight: 600, color: STATUS_TEXT } }, title),
               h("div", { style: { fontSize: 11, color: STATUS_MUTED } }, cardSub),
-              h("div", { style: { fontSize: 10.5, color: STATUS_MUTED, opacity: 0.85 } }, "完成后把最旧的这段历史收成一条交接文档")
+              h("div", { style: { fontSize: 10.5, color: STATUS_MUTED, opacity: 0.85 } }, "完成后把最旧的这段历史收成一条摘要")
             )
           ),
           document.body
@@ -725,7 +787,7 @@ window.__ModuleLoader__.load({
         h("div", {
           role: "dialog",
           "aria-modal": "true",
-          "aria-label": raising ? "中途压缩失败" : "交接文档生成失败",
+          "aria-label": raising ? "中途压缩失败" : "摘要生成失败",
           "data-dsh-handoff-hint": hint.kind || "enable-midtask",
           style: {
             position: "fixed", inset: 0,
@@ -746,7 +808,7 @@ window.__ModuleLoader__.load({
                 },
               }, "!"),
               h("div", { style: { flex: "1 1 auto", minWidth: 0 } },
-                h("h3", { style: titleStyle }, raising ? "中途压缩也失败了" : "交接文档生成失败"),
+                h("h3", { style: titleStyle }, raising ? "中途压缩也失败了" : "摘要生成失败"),
                 h("div", { style: subStyleDialog }, raising ? "触发余量偏小，压缩请求放不下" : "上下文余量不足，历史未改动")
               ),
               h("button", {
@@ -764,7 +826,7 @@ window.__ModuleLoader__.load({
                 : h("p", { style: para },
                   "这一轮结束时上下文已用到 ", h("span", { style: strong }, fmt(used) + " / " + fmt(windowTokens)),
                   " tokens，只剩 ", h("span", { style: strong }, fmt(remaining)),
-                  "。写交接文档本身还要思考并生成摘要（约需 ", h("span", { style: strong }, fmt(needed)),
+                  "。写摘要本身还要思考并生成内容（约需 ", h("span", { style: strong }, fmt(needed)),
                   "），请求放不下，所以这次压缩没有执行，历史保持原样。"),
 
               h("div", { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", fontSize: 11, color: STATUS_MUTED, margin: "10px 0 6px" } },
@@ -1043,10 +1105,16 @@ window.__ModuleLoader__.load({
           "color:var(--dsw-alias-label-primary,#dbe6ee)}",
           ".dsh-tl-note{font-size:10px;line-height:1.7;margin:12px 0 0;color:var(--dsw-alias-label-tertiary,#6c7c88)}",
           ".dsh-tl-docwrap{display:flex;flex-direction:column;min-height:0;padding:14px 18px 18px}",
-          ".dsh-tl-doctitle{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;",
+          ".dsh-tl-doctitle{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;",
           "font-size:10.5px;color:var(--dsw-alias-label-secondary,#88939c)}",
           ".dsh-tl-doctitle b{font-weight:500;color:var(--dsw-alias-label-primary,#c9d5de)}",
-          ".dsh-tl-doc{margin:0;flex:1;overflow:auto;white-space:pre-wrap;font-size:11.5px;line-height:1.85;",
+          ".dsh-tl-docmeta{display:inline-flex;align-items:center;gap:10px;white-space:nowrap}",
+          ".dsh-tl-zoom{display:inline-flex;align-items:center;gap:3px}",
+          ".dsh-tl-zbtn{width:20px;height:20px;padding:0;display:inline-flex;align-items:center;justify-content:center;",
+          "border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.12));border-radius:5px;background:none;",
+          "color:var(--dsw-alias-label-secondary,#88939c);cursor:pointer;font:inherit;font-size:13px;line-height:1}",
+          ".dsh-tl-zbtn:hover{color:var(--dsw-alias-label-primary,#eaf1f6);border-color:rgba(241,75,11,.45)}",
+          ".dsh-tl-doc{margin:0;flex:1;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:1.85;",
           "color:var(--dsw-alias-label-primary,#c8d5df);background:var(--dsw-alias-bg-layer-1,#10161b);",
           "border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));border-radius:10px;padding:14px 16px}",
           "@media (max-width:900px){.dsh-tl-modal{width:96vw;height:88vh}",
@@ -1093,6 +1161,15 @@ window.__ModuleLoader__.load({
         return fmt(Number.isFinite(cjk) ? cjk : 0) + " 字" + (Number.isFinite(words) && words > 0 ? " · " + fmt(words) + " 词" : "");
       }
       return fmt(Number(event.summaryChars) || 0) + " 字符";
+    }
+    /** History carries manual / midtask / auto; files written before 0.3.1 have no midtask. */
+    function triggerLabel(trigger) {
+      if (trigger === "manual") return "手动 /compact";
+      return trigger === "midtask" ? "自动（任务中途）" : "自动（空闲时）";
+    }
+    function triggerShort(trigger) {
+      if (trigger === "manual") return "手动 /compact";
+      return trigger === "midtask" ? "自动（中途）" : "自动";
     }
 
     /**
@@ -1151,10 +1228,12 @@ window.__ModuleLoader__.load({
           cr.left,
           sr2 && sr2.height > 100 ? sr2.left : 0
         ));
-        // Follow the native turn rail: it is centred in the scroll viewport minus the
-        // composer and capped at 420px (see the rail's frame CSS). Centring on the
-        // whole content area instead sits the chain lower than the rail, because
-        // the composer occupies its bottom.
+        // Follow the native turn rail's centre line (scroll viewport minus the
+        // composer), but not its 420px frame: a long local session can compact
+        // dozens of times, and the cap collapsed the pitch and then the labels
+        // while half the gutter stayed empty. The chain now uses the whole
+        // usable height instead. Centring on the whole content area would sit
+        // it lower than the rail, because the composer occupies its bottom.
         var viewportTop = sr2 && sr2.height > 200 ? sr2.top : cr.top;
         var viewportHeight = sr2 && sr2.height > 200 ? sr2.height : cr.height;
         var seatEl = content.querySelector("[data-composer-seat]");
@@ -1166,7 +1245,8 @@ window.__ModuleLoader__.load({
         out.height = Math.round(band);
         // The chain lives in a fixed centred band; spacing adapts inside it so
         // a long history never pushes entries past the conversation edges.
-        out.regionHeight = Math.round(Math.min(band - 64, 420));
+        // 24px leaves a small breathing margin at the top and bottom.
+        out.regionHeight = Math.round(Math.max(200, band - 24));
         var width = Math.min(248, columnLeft - contentLeft - 24);
         var left = columnLeft - width - 12;
         if (left < contentLeft + 8) {
@@ -1375,8 +1455,8 @@ window.__ModuleLoader__.load({
 
         var rows = [
           ["压缩用时", durationText(active.durationMs)],
-          ["触发方式", active.trigger === "manual" ? "手动 /compact" : "自动（空闲时）"],
-          ["交接文档", wordText(active)],
+          ["触发方式", triggerLabel(active.trigger)],
+          ["摘要", wordText(active)],
           ["摘要输出", Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
           ["替换历史", (fmt(Number(active.shadowedNodes) || 0) + " 条 / " + fmt(Number(active.shadowedTokens) || 0) + " tokens")],
             ["模型", [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
@@ -1414,8 +1494,8 @@ window.__ModuleLoader__.load({
                 h("p", { className: "dsh-tl-note" }, "字数与时长为插件本地计算；tokens 取 DSH usage 与摘要调用 usage，不额外消耗模型算力。")
               ),
               h("div", { className: "dsh-tl-docwrap" },
-                h("div", { className: "dsh-tl-doctitle" }, h("b", null, "交接文档全文"), h("span", null, wordText(active))),
-                h("pre", { className: "dsh-tl-doc" }, String(active.summary || "（本次未记录交接文档）"))
+                docTitle(connection, active),
+                h("pre", { className: "dsh-tl-doc" }, String(active.summary || "（本次未记录摘要）"))
               )
             )
           )
@@ -1560,7 +1640,7 @@ window.__ModuleLoader__.load({
       if (events.length === 0) {
         return h("div", { className: "dsh-ct-empty" },
           h("b", null, "还没有压缩记录"),
-          h("span", null, "达到触发点或手动 /compact 后，这里会列出每次压缩的时间、用时与交接文档。")
+          h("span", null, "达到触发点或手动 /compact 后，这里会列出每次压缩的时间、用时与摘要。")
         );
       }
 
@@ -1588,8 +1668,8 @@ window.__ModuleLoader__.load({
       );
       var rows = [
         ["压缩用时", durationText(active.durationMs)],
-        ["触发方式", active.trigger === "manual" ? "手动 /compact" : "自动（空闲时）"],
-        ["交接文档", wordText(active)],
+        ["触发方式", triggerLabel(active.trigger)],
+        ["摘要", wordText(active)],
         ["摘要输出", Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
         ["替换历史", (fmt(Number(active.shadowedNodes) || 0) + " 条 / " + fmt(Number(active.shadowedTokens) || 0) + " tokens")],
         ["模型", [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
@@ -1622,7 +1702,7 @@ window.__ModuleLoader__.load({
       var detail = h("div", { className: "dsh-ct-detail" },
         h("div", { className: "dsh-ct-detailhead" },
           h("span", { className: "dsh-ct-detailtitle" }, "第 " + String(index + 1) + " 次压缩"),
-          h("span", { className: "dsh-ct-stamp" }, dateOf(active.startedAt) + " · " + clockOf(active.startedAt) + " · " + (active.trigger === "manual" ? "手动 /compact" : "自动"))
+          h("span", { className: "dsh-ct-stamp" }, dateOf(active.startedAt) + " · " + clockOf(active.startedAt) + " · " + triggerShort(active.trigger))
         ),
         h("div", { className: "dsh-ct-top" },
           h("div", { className: "dsh-tl-hero" },
@@ -1642,8 +1722,8 @@ window.__ModuleLoader__.load({
             })
           )
         ),
-        h("div", { className: "dsh-tl-doctitle" }, h("b", null, "交接文档全文"), h("span", null, wordText(active))),
-        h("pre", { className: "dsh-tl-doc" }, String(active.summary || "（本次未记录交接文档）")),
+        docTitle(connection, active),
+        h("pre", { className: "dsh-tl-doc" }, String(active.summary || "（本次未记录摘要）")),
         h("p", { className: "dsh-tl-note" }, "字数与时长为插件本地计算；tokens 取 DSH usage 与摘要调用 usage，不额外消耗模型算力。")
       );
 
@@ -1849,7 +1929,7 @@ window.__ModuleLoader__.load({
           h("div", null,
             h("div", { style: labelStyle }, "启用插件", pendingTag(pending.enabled), !enabled ? h("span", { style: offBadgeStyle }, "已停用") : null),
             h("div", { style: subStyle }, enabled
-              ? "达到触发点后，等 agent 空闲时把历史折叠成一份交接文档；压缩由本插件接管。"
+              ? "达到触发点后，等 agent 空闲时把历史折叠成一份摘要；压缩由本插件接管。"
               : "关闭后压缩交回 DSH 原生实现：按原生阈值自动折叠，也可继续用 /compact 手动压缩。")
           ),
           h(ToggleSwitch, {
@@ -1979,7 +2059,7 @@ window.__ModuleLoader__.load({
             h("div", null,
               h("div", { style: labelStyle }, "压缩时间线", pendingTag(pending.timeline)),
               h("div", { style: subStyle }, tlEnabled
-                ? "把每次压缩的时间、用时和字数显示在会话里，点击可查看交接文档全文。"
+                ? "把每次压缩的时间、用时和字数显示在会话里，点击可查看摘要全文。"
                 : "已关闭：不显示时间线，也不新增「压缩」页签；压缩历史仍会记录在磁盘上。")
             ),
             h(ToggleSwitch, {
@@ -2006,7 +2086,7 @@ window.__ModuleLoader__.load({
           h("div", { style: Object.assign({}, subStyle, { marginTop: 7 }) }, tlEnabled
             ? (tlPosition === "chat"
               ? "珠链挂在「对话」正文左侧空槽，随会话常驻；切到「轨迹」自动隐藏。"
-              : "在「轨迹」和其它插件页签之后追加「压缩」页签，不占固定位置；集中浏览压缩记录与交接文档。")
+              : "在「轨迹」和其它插件页签之后追加「压缩」页签，不占固定位置；集中浏览压缩记录与摘要。")
             : "时间线已关闭，显示位置暂不生效。"),
           h("div", { style: { fontSize: 11.5, color: C.faint, marginTop: 8 } }, "保存后即时生效，无需重启；关闭仅隐藏显示，压缩历史仍会记录在磁盘上。")
         ),
@@ -2063,8 +2143,8 @@ window.__ModuleLoader__.load({
         ),
 
         h("div", { style: { paddingTop: 14 } },
-          h("div", { style: labelStyle }, "交接模板", pendingTag(pending.template)),
-          h("div", { style: Object.assign({}, subStyle, { marginBottom: 8 }) }, "压缩时让模型按这份模板写交接文档；每次压缩时读取，改完不用重启。此插件模板完全基于 DSH 原生压缩模板的中文翻译版，若需要撤销自己的修改，只需要从磁盘删除该模板文件，然后重启 DSH，模板会自动重建。"),
+          h("div", { style: labelStyle }, "摘要模板", pendingTag(pending.template)),
+          h("div", { style: Object.assign({}, subStyle, { marginBottom: 8 }) }, "压缩时让模型按这份模板写摘要；每次压缩时读取，改完不用重启。此插件模板完全基于 DSH 原生压缩模板的中文翻译版，若需要撤销自己的修改，只需要从磁盘删除该模板文件，然后重启 DSH，模板会自动重建。"),
           h("div", { style: { display: "flex", alignItems: "center", gap: 8, background: C.field, border: "1px solid " + C.line, borderRadius: 8, padding: "7px 10px" } },
             h("input", {
               value: template, placeholder: defaultTemplate, "aria-label": "模板文件路径",
@@ -2082,9 +2162,9 @@ window.__ModuleLoader__.load({
           h("div", { style: { fontSize: 12.5, fontWeight: 600, color: C.text, marginBottom: 8 } }, "它是怎么压缩的"),
           h("ol", { style: { margin: 0, paddingLeft: 18, color: C.muted, fontSize: 12.5, lineHeight: 1.85 } },
             h("li", null, "到点后不立即动手，等 agent 结束当前回合。"),
-            h("li", null, "写交接文档时会复用会话已算过的上下文（命中缓存），不重新全量计算历史。"),
-            h("li", null, "只替换最旧的这一段历史，换成一条交接文档；最近约 16% 窗口的原文逐字留着，切点也不会把工具调用和它的结果拆开。"),
-            h("li", null, "下一轮 = 系统提示词 + 工具定义 + 这条交接文档 + 那段逐字保留的最近消息；旧消息仍在会话日志里，可用回滚功能恢复。")
+            h("li", null, "写摘要时会复用会话已算过的上下文（命中缓存），不重新全量计算历史。"),
+            h("li", null, "只替换最旧的这一段历史，换成一条摘要；最近约 16% 窗口的原文逐字留着，切点也不会把工具调用和它的结果拆开。"),
+            h("li", null, "下一轮 = 系统提示词 + 工具定义 + 这条摘要 + 那段逐字保留的最近消息；旧消息仍在会话日志里，可用回滚功能恢复。")
           ),
           h("div", { style: { marginTop: 8, fontSize: 11.5, color: C.faint } }, "手动压缩：会话里发送 /compact 可随时折叠一次，不受这个比例限制。")
         ),
@@ -2101,6 +2181,7 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       var slots = ctx.slots;
       var connection = ctx.connection;
+      try { loadDocFontSize(connection); } catch (error) { /* keep the default size */ }
 
       try {
         slots.inject("settings.section", function () {

@@ -679,7 +679,9 @@ export default class HandoffCompaction extends BasicCompactionEngine {
         writing: false,
         midTask: true,
       });
-      if (result !== null && result !== undefined) this.recordHistory(agent, startedAt, "auto", measurement.totalTokens, result);
+      // A distinct trigger keeps the timeline honest: this compression happened
+      // between steps of a live turn, not while the agent sat idle.
+      if (result !== null && result !== undefined) this.recordHistory(agent, startedAt, "midtask", measurement.totalTokens, result);
       this.log(`midtask committed: replaced ${shadowedNodes} node(s) (~${shadowedTokens} tokens); the turn continues`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
