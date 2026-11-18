@@ -188,6 +188,7 @@ const SAVED = {
   displayStyle: "orbit",
   timelineEnabled: true,
   timelinePosition: "chat",
+  timelineStyle: "ember",
   defaultSummaryMaxTokens: 12288,
 };
 const INVENTORY = {
@@ -228,7 +229,7 @@ test("each unsaved field marks its own title as pending", () => {
   assert.match(textOf(renderSection(Object.assign({}, SAVED, { thresholdRatio: 0.75 }))),
     /压缩触发点（保存后生效）/);
   assert.match(textOf(renderSection(Object.assign({}, SAVED, { displayStyle: "strip" }))),
-    /压缩显示方式（保存后生效）/);
+    /压缩中样式（保存后生效）/);
   assert.match(textOf(renderSection(Object.assign({}, SAVED, { summaryMaxTokens: 16000 }))),
     /摘要上限（保存后生效）/);
 });
@@ -251,6 +252,100 @@ test("mid-task fields mark their own titles as pending", () => {
     /任务中途压缩（保存后生效）/);
   assert.match(textOf(renderSection(Object.assign({}, SAVED, { suppressFailureHint: true }))),
     /压缩失败提示（保存后生效）/);
+});
+
+
+test("display section nests two parallel sub-titles and all five timeline styles", () => {
+  const text = textOf(renderSection(SAVED));
+  assert.match(text, /压缩显示方式/);
+  assert.match(text, /压缩中样式/);
+  assert.match(text, /压缩时间线/);
+  assert.match(text, /时间线样式/);
+  for (const label of ["火种刻度", "胶囊流", "环相", "静默刻度", "比例柱"]) {
+    assert.ok(text.includes(label), label);
+  }
+  // The two explanatory blurbs were removed on purpose.
+  assert.doesNotMatch(text, /选择压缩进行时在会话里的提示样式/);
+  assert.doesNotMatch(text, /把每次压缩的时间、用时和字数显示在会话里/);
+});
+
+test("timeline position and style pending markers sit on the timeline title", () => {
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { timelineStyle: "capsule" }))),
+    /压缩时间线（保存后生效）/);
+  assert.match(textOf(renderSection(Object.assign({}, SAVED, { timelinePosition: "tab" }))),
+    /压缩时间线（保存后生效）/);
+  assert.doesNotMatch(textOf(renderSection(Object.assign({}, SAVED, { timelineStyle: "capsule" }))),
+    /时间线样式（保存后生效）/);
+});
+
+const CHAIN_EVENTS = [
+  { startedAt: 1794301000000, durationMs: 13900, cjk: 1204, words: 0, beforeTokens: 230000, contextWindow: 250000, trigger: "auto" },
+  { startedAt: 1794301500000, durationMs: 10200, cjk: 987, words: 0, beforeTokens: 225000, contextWindow: 250000, trigger: "auto" },
+  { startedAt: 1794302000000, durationMs: 61000, cjk: 2049, words: 0, beforeTokens: 240000, contextWindow: 250000, trigger: "manual" },
+];
+function renderChain(style, regionH) {
+  return api.TimelineChain({ events: CHAIN_EVENTS, style, regionH: regionH || 300, onOpen: () => {} });
+}
+function chainRows(tree) {
+  return tree.children.filter((c) => c && c.type === "button");
+}
+
+test("chain: ember rows carry time, bead and metrics, latest marked on", () => {
+  const rows = chainRows(renderChain("ember"));
+  assert.equal(rows.length, 3);
+  assert.ok(findByClass(rows[2], "dsh-tl-tm"), "time column");
+  assert.ok(findByClass(rows[2], "dsh-tl-dot"), "bead");
+  assert.ok(findByClass(rows[2], "dsh-tl-meta"), "metrics");
+  assert.match(rows[2].props.className, /\bon\b/);
+});
+
+test("chain: capsule rows wrap time and metrics in a cap", () => {
+  const rows = chainRows(renderChain("capsule"));
+  assert.equal(rows.length, 3);
+  assert.ok(findByClass(rows[0], "dsh-tl-cap"), "capsule body");
+  assert.ok(findByClass(rows[2], "dsh-tl-metrics"), "metrics");
+});
+
+test("chain: ring rows draw an svg progress ring", () => {
+  const rows = chainRows(renderChain("ring"));
+  const ring = findByClass(rows[1], "dsh-tl-ringmini");
+  assert.ok(ring, "mini ring");
+  assert.equal(ring.type, "svg");
+  assert.equal(ring.children.length, 3);
+});
+
+test("chain: quiet rows are ticks with a hover card", () => {
+  const rows = chainRows(renderChain("quiet"));
+  assert.ok(findByClass(rows[0], "dsh-tl-tick"), "tick");
+  assert.ok(findByClass(rows[0], "dsh-tl-tm"), "clock visible without hover");
+  assert.ok(findByClass(rows[2], "dsh-tl-hover"), "hover card");
+  assert.match(textOf(findByClass(rows[2], "dsh-tl-hover")), /2,049 字/);
+});
+
+test("chain: bars rows use the real context share and keep the word count", () => {
+  const rows = chainRows(renderChain("bars"));
+  const track = findByClass(rows[2], "dsh-tl-track");
+  assert.ok(track, "track");
+  // 240,000 / 250,000 = 96% — the same number the detail dialog shows.
+  assert.equal(track.children[0].props.style.width, "96.0%");
+  assert.equal(textOf(findByClass(rows[2], "dsh-tl-num")), "2,049 字");
+  assert.equal(findByClass(rows[0], "dsh-tl-track").children[0].props.style.width, "92.0%");
+  assert.match(track.props.title, /触发时占窗口 96\.0%/);
+});
+
+test("chain: dense packing degrades capsule to beads and bars to tracks", () => {
+  const caps = chainRows(renderChain("capsule", 36));
+  assert.equal(findByClass(caps[0], "dsh-tl-cap"), null);
+  assert.ok(findByClass(caps[0], "dsh-tl-dot"));
+  const bars = chainRows(renderChain("bars", 36));
+  assert.equal(findByClass(bars[0], "dsh-tl-tm"), null);
+  assert.equal(findByClass(bars[0], "dsh-tl-num"), null);
+  assert.ok(findByClass(bars[0], "dsh-tl-track"));
+});
+
+test("chain: unknown style falls back to ember", () => {
+  const rows = chainRows(renderChain("bogus"));
+  assert.ok(findByClass(rows[0], "dsh-tl-meta"), "ember metrics");
 });
 
 const ENABLE_HINT = {

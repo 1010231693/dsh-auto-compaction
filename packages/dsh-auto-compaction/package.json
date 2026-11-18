@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-compaction",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

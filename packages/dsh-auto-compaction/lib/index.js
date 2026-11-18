@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { mountTakeover, presetInventory, readRowMaxTokens } from "./takeover-mount.js";
 import { installRootAutoGuard } from "./root-auto-guard.js";
-import { normalizeTimelinePosition } from "./timeline-prefs.js";
+import { normalizeTimelinePosition, normalizeTimelineStyle } from "./timeline-prefs.js";
 
 export const name = "dsh-auto-compaction";
 export const inject = [];
@@ -34,6 +34,7 @@ export const Config = z.object({
   displayStyle: z.string().default("orbit"),
   timelineEnabled: z.boolean().default(true),
   timelinePosition: z.string().default("chat"),
+  timelineStyle: z.string().default("ember"),
 });
 
 const DIR = join(homedir(), ".dsh-handoff-compaction");
@@ -125,6 +126,7 @@ function normalize(config) {
     displayStyle: normalizeDisplayStyle(config.displayStyle),
     timelineEnabled: config.timelineEnabled !== false,
     timelinePosition: normalizeTimelinePosition(config.timelinePosition),
+    timelineStyle: normalizeTimelineStyle(config.timelineStyle),
   };
 }
 
@@ -301,6 +303,7 @@ function sanitize(payload) {
     displayStyle: normalizeDisplayStyle(payload?.displayStyle),
     timelineEnabled: payload?.timelineEnabled !== false,
     timelinePosition: normalizeTimelinePosition(payload?.timelinePosition),
+    timelineStyle: normalizeTimelineStyle(payload?.timelineStyle),
     midTaskEnabled: payload?.midTaskEnabled === true,
     suppressFailureHint: payload?.suppressFailureHint === true,
   };
@@ -328,6 +331,7 @@ function settingsPayload(stored) {
     displayStyle: stored?.displayStyle,
     timelineEnabled: stored?.timelineEnabled,
     timelinePosition: stored?.timelinePosition,
+    timelineStyle: stored?.timelineStyle,
     summaryMaxTokens: stored?.summaryMaxTokens,
     midTaskEnabled: stored?.midTaskEnabled,
     midTaskTriggerTokens: stored?.midTaskTriggerTokens,
@@ -408,6 +412,7 @@ export function apply(ctx, config = {}) {
                 displayStyle: normalizeDisplayStyle(stored.displayStyle),
                 timelineEnabled: stored.timelineEnabled !== false,
                 timelinePosition: normalizeTimelinePosition(stored.timelinePosition),
+                timelineStyle: normalizeTimelineStyle(stored.timelineStyle),
                 docFontSize: normalizeDocFontSize(stored.docFontSize),
                 defaultTemplate: TEMPLATE_FILE,
                 defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS,

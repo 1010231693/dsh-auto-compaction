@@ -102,17 +102,29 @@ window.__ModuleLoader__.load({
     /* Timeline display prefs mirror lib/timeline-prefs.js; the bundle cannot
      * import local modules, so the normalization is inlined (same split as
      * displayStyle). UI-only: the engine records history regardless. */
-    var timelinePrefs = { enabled: true, position: "chat" };
+    var TIMELINE_STYLES = ["ember", "capsule", "ring", "quiet", "bars"];
+    var TIMELINE_STYLE_OPTIONS = [
+      { id: "ember", label: "火种刻度", desc: "时间右对齐、珠在轴上，像一条日志轴；信息密度最高。" },
+      { id: "capsule", label: "胶囊流", desc: "每次压缩一枚胶囊，最新一枚实心橙；点击面积最大。" },
+      { id: "ring", label: "环相", desc: "每颗珠是一个进度环，弧长表示触发时占窗口的比例。" },
+      { id: "quiet", label: "静默刻度", desc: "默认只有火线与时间，悬停展开用时、字数与触发方式。" },
+      { id: "bars", label: "比例柱", desc: "把摘要字数画成横向条，一眼看出哪次压得狠。" },
+    ];
+    var timelinePrefs = { enabled: true, position: "chat", style: "ember" };
     var timelineListeners = [];
     function normalizeTimelinePosition(value) {
       return value === "tab" ? "tab" : "chat";
+    }
+    function normalizeTimelineStyle(value) {
+      return TIMELINE_STYLES.indexOf(value) >= 0 ? value : "ember";
     }
     function publishTimelinePrefs(settings) {
       var next = {
         enabled: !settings || settings.timelineEnabled !== false,
         position: normalizeTimelinePosition(settings && settings.timelinePosition),
+        style: normalizeTimelineStyle(settings && settings.timelineStyle),
       };
-      if (next.enabled === timelinePrefs.enabled && next.position === timelinePrefs.position) return;
+      if (next.enabled === timelinePrefs.enabled && next.position === timelinePrefs.position && next.style === timelinePrefs.style) return;
       timelinePrefs = next;
       for (var i = 0; i < timelineListeners.length; i += 1) {
         try { timelineListeners[i](timelinePrefs); } catch (error) { /* a bad subscriber must not break the dock */ }
@@ -989,6 +1001,49 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /* Static sample events for the settings preview: the last three
+     * compactions of an example session, so every style shows real rows. */
+    function timelinePreviewEvents() {
+      var base = new Date();
+      base.setHours(9, 21, 33, 0);
+      var rows = [[0, 13900, 1204, 68], [8, 10200, 987, 84], [17, 61000, 2049, 96]];
+      return rows.map(function (row) {
+        return {
+          startedAt: base.getTime() + row[0] * 60000,
+          durationMs: row[1],
+          cjk: row[2],
+          words: 0,
+          beforeTokens: Math.round(row[3] * 2500),
+          contextWindow: 250000,
+          trigger: "auto",
+        };
+      });
+    }
+
+    /* 248px-wide gutter preview next to a one-line description of the style. */
+    function TimelineStylePreview(props) {
+      var palette = accentColor();
+      var option = TIMELINE_STYLE_OPTIONS.filter(function (o) { return o.id === props.style; })[0] || TIMELINE_STYLE_OPTIONS[0];
+      // Stacked (chain above, copy below): the host's style pipeline only
+      // honours a subset of flex spacing, so side-by-side always ended up
+      // glued together. Vertical spacing via padding survives that.
+      return h("div", {
+        style: {
+          marginTop: 8, border: "1px solid " + C.line, borderRadius: 10,
+          background: C.canvas, padding: 12,
+          "--dsh-tl-accent": palette.accent, "--dsh-tl-bead": palette.bead, "--dsh-tl-time": palette.time,
+        },
+      },
+        h("div", { style: { width: 224, height: 100, position: "relative" } },
+          h(TimelineChain, { events: timelinePreviewEvents(), style: props.style, regionH: 100, demoHover: true })
+        ),
+        h("div", { style: { paddingTop: 10, paddingLeft: 2 } },
+          h("div", { style: { fontSize: 12.5, fontWeight: 600, color: C.text } }, option.label + (option.id === "ember" ? " · 推荐" : "")),
+          h("div", { style: { fontSize: 11.5, color: C.muted, marginTop: 3, lineHeight: 1.7 } }, option.desc)
+        )
+      );
+    }
+
     function ToggleSwitch(props) {
       var on = props.checked === true;
       return h("button", {
@@ -1052,7 +1107,8 @@ window.__ModuleLoader__.load({
         style.id = TIMELINE_STYLE_ID;
         style.textContent = [
           ".dsh-tl{position:fixed;z-index:6;pointer-events:auto;",
-          "transform:translateY(-50%);",
+          "transform:translateY(-50%);box-sizing:border-box;",
+          ".dsh-tl *,.dsh-tl-list,.dsh-tl-list *{box-sizing:border-box}",
           "font-family:var(--dsh-font-sans,system-ui,'Segoe UI','Microsoft YaHei',sans-serif)}",
           ".dsh-tl-list{position:relative;width:100%}",
           ".dsh-tl-line{position:absolute;left:8px;width:1px;opacity:.45;",
@@ -1117,6 +1173,62 @@ window.__ModuleLoader__.load({
           ".dsh-tl-doc{margin:0;flex:1;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:1.85;",
           "color:var(--dsw-alias-label-primary,#c8d5df);background:var(--dsw-alias-bg-layer-1,#10161b);",
           "border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.08));border-radius:10px;padding:14px 16px}",
+          "/* ---- five timeline styles, all sharing the pitch/degradation rules ---- */",
+          ".dsh-tl-tm{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-tl-meta{font-family:ui-monospace,Consolas,monospace;font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-tl-meta b{font-weight:500;color:var(--dsh-tl-time,#f2c8b8)}",
+          ".dsh-tl--compact .dsh-tl-meta{display:none}",
+          ".dsh-tl--compact .dsh-tl-tm{font-size:9px}",
+          ".dsh-tl--ember .dsh-tl-ev{display:grid;grid-template-columns:20px 62px minmax(0,1fr);align-items:center;width:100%}",
+          ".dsh-tl--ember .dsh-tl-tm{text-align:right}",
+          ".dsh-tl--ember .dsh-tl-node{display:flex;justify-content:center}",
+          ".dsh-tl--ember .dsh-tl-meta{margin-left:0;padding-left:10px;font-size:10px}",
+          ".dsh-tl--ember .dsh-tl-ev.on .dsh-tl-tm{color:var(--dsh-tl-time,#f2c8b8);font-weight:600}",
+          ".dsh-tl--ember .dsh-tl-ev.on .dsh-tl-meta b{color:var(--dsw-alias-label-primary,#eaf1f6)}",
+          ".dsh-tl--capsule .dsh-tl-ev{display:block;width:100%;border-radius:8px}",
+          ".dsh-tl--capsule .dsh-tl-dot{position:absolute;left:7px;top:50%;transform:translateY(-50%);z-index:2;margin-left:0}",
+          ".dsh-tl--capsule .dsh-tl-cap{display:flex;align-items:center;gap:7px;margin-left:20px;width:calc(100% - 20px);height:100%;padding:0 9px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.06));background:color-mix(in srgb,var(--dsw-alias-label-secondary,#cfd3d6) 9%,transparent)}",
+          ".dsh-tl--capsule .dsh-tl-tm{color:var(--dsw-alias-label-primary,#cfd3d6)}",
+          ".dsh-tl--capsule .dsh-tl-metrics{margin-left:auto;font-family:ui-monospace,Consolas,monospace;font-size:9.5px;color:var(--dsw-alias-label-secondary,#88939c);white-space:nowrap;font-variant-numeric:tabular-nums}",
+          ".dsh-tl--capsule .dsh-tl-ev:not(.on) .dsh-tl-cap:hover{border-color:rgba(241,75,11,.45)}",
+          ".dsh-tl--capsule .dsh-tl-ev.on .dsh-tl-cap{background:linear-gradient(135deg,#f14b0b,#b83705);border-color:transparent;box-shadow:0 2px 14px rgba(241,75,11,.4)}",
+          ".dsh-tl--capsule .dsh-tl-ev.on .dsh-tl-tm{color:#fff;font-weight:600}",
+          ".dsh-tl--capsule .dsh-tl-ev.on .dsh-tl-metrics{color:#ffe2d6}",
+          ".dsh-tl--capsule .dsh-tl-ev.on .dsh-tl-dot{background:var(--dsh-tl-accent,#f14b0b);box-shadow:0 0 0 2px rgba(241,75,11,.32),0 0 10px rgba(241,75,11,.7)}",
+          ".dsh-tl--capsule .dsh-tl-thread{position:absolute;left:10px;width:1px;background:color-mix(in srgb,var(--dsh-tl-accent,#f14b0b) 38%,transparent)}",
+          ".dsh-tl--ring .dsh-tl-ev{display:grid;grid-template-columns:20px 62px minmax(0,1fr);align-items:center;width:100%}",
+          ".dsh-tl--ring .dsh-tl-ringmini{justify-self:center;display:block}",
+          ".dsh-tl--ring .dsh-tl-tm{text-align:right}",
+          ".dsh-tl--ring .dsh-tl-meta{margin-left:0;padding-left:10px;font-size:9.5px}",
+          ".dsh-tl--ring .dsh-tl-ev.on .dsh-tl-tm{color:var(--dsh-tl-time,#f2c8b8);font-weight:600}",
+          ".dsh-tl--ring .dsh-tl-ev.on .dsh-tl-meta b{color:var(--dsw-alias-label-primary,#eaf1f6)}",
+          ".dsh-tl--ring .dsh-tl-ev.on .dsh-tl-ringmini{filter:drop-shadow(0 0 6px rgba(241,75,11,.65))}",
+          ".dsh-tl-ringmini .trk{stroke:color-mix(in srgb,var(--dsh-tl-accent,#f14b0b) 18%,transparent)}",
+          ".dsh-tl-ringmini .arc{stroke:var(--dsh-tl-accent,#f14b0b)}",
+          ".dsh-tl-ringmini .core{fill:var(--dsh-tl-accent,#f14b0b)}",
+          ".dsh-tl--quiet .dsh-tl-ev{display:flex;align-items:center;width:auto;max-width:100%;left:0}",
+          ".dsh-tl--quiet .dsh-tl-tm{margin-left:8px;font-size:9.5px}",
+          ".dsh-tl--quiet .dsh-tl-ev.on .dsh-tl-tm{color:var(--dsh-tl-time,#f2c8b8);font-weight:600}",
+          ".dsh-tl--quiet .dsh-tl-tick{display:block;width:9px;height:2px;border-radius:1px;background:color-mix(in srgb,var(--dsh-tl-accent,#f14b0b) 62%,var(--dsw-alias-label-tertiary,#7f858c) 38%);margin-left:10px}",
+          ".dsh-tl--quiet .dsh-tl-ev:hover .dsh-tl-tick{width:13px;background:var(--dsh-tl-accent,#f14b0b)}",
+          ".dsh-tl--quiet .dsh-tl-ev.on .dsh-tl-tick{width:17px;height:3px;background:var(--dsh-tl-accent,#f14b0b);box-shadow:0 0 10px rgba(241,75,11,.7)}",
+          ".dsh-tl--quiet .dsh-tl-hover{position:absolute;left:calc(100% + 6px);top:50%;transform:translateY(-50%);padding:6px 8px;border-radius:8px;background:var(--dsw-alias-bg-layer-3,#353638);border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.1));box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;z-index:3}",
+          ".dsh-tl--quiet .dsh-tl-ev:hover .dsh-tl-hover{opacity:1}",
+          ".dsh-tl--quiet .dsh-tl-ev.demo .dsh-tl-hover{opacity:1}",
+          ".dsh-tl--quiet .dsh-tl-hover b{display:block;font-family:ui-monospace,Consolas,monospace;font-size:10px;font-weight:500;color:var(--dsh-tl-time,#f2c8b8)}",
+          ".dsh-tl--quiet .dsh-tl-hover span{display:block;margin-top:2px;font-size:9.5px;color:var(--dsw-alias-label-secondary,#88939c)}",
+          ".dsh-tl--bars .dsh-tl-ev{display:grid;grid-template-columns:48px minmax(0,1fr) 46px;align-items:center;gap:6px;width:100%}",
+          ".dsh-tl--bars .dsh-tl-tm{font-size:9.5px}",
+          ".dsh-tl--bars .dsh-tl-track{position:relative;height:9px;border-radius:5px;overflow:hidden;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--dsw-alias-label-tertiary,#7f858c) 45%,transparent);background:" +
+            "repeating-linear-gradient(90deg,transparent 0 calc(25% - 1px),color-mix(in srgb,var(--dsw-alias-label-tertiary,#7f858c) 48%,transparent) calc(25% - 1px) 25%)," +
+            "color-mix(in srgb,var(--dsw-alias-label-tertiary,#7f858c) 30%,transparent)}",
+          ".dsh-tl--bars .dsh-tl-track i{display:block;height:100%;border-radius:4px;background:color-mix(in srgb,var(--dsh-tl-accent,#f14b0b) 46%,transparent)}",
+          ".dsh-tl--bars .dsh-tl-ev:hover .dsh-tl-track i{background:color-mix(in srgb,var(--dsh-tl-accent,#f14b0b) 66%,transparent)}",
+          ".dsh-tl--bars .dsh-tl-ev.on .dsh-tl-track{background:color-mix(in srgb,var(--dsh-tl-accent,#f14b0b) 13%,transparent)}",
+          ".dsh-tl--bars .dsh-tl-ev.on .dsh-tl-track i{background:var(--dsh-tl-accent,#f14b0b);box-shadow:0 0 8px color-mix(in srgb,var(--dsh-tl-accent,#f14b0b) 45%,transparent)}",
+          ".dsh-tl--bars .dsh-tl-ev.on .dsh-tl-tm{color:var(--dsh-tl-time,#f2c8b8);font-weight:600}",
+          ".dsh-tl--bars .dsh-tl-num{font-family:ui-monospace,Consolas,monospace;font-size:9px;text-align:right;color:var(--dsw-alias-label-secondary,#88939c);white-space:nowrap}",
+          ".dsh-tl--bars .dsh-tl-ev.on .dsh-tl-num{color:var(--dsw-alias-label-secondary,#88939c)}",
           "@media (max-width:900px){.dsh-tl-modal{width:96vw;height:88vh}",
           ".dsh-tl-mb{grid-template-columns:1fr}.dsh-tl-stats{border-right:0;",
           "border-bottom:1px solid rgba(255,255,255,.08)}}",
@@ -1144,6 +1256,14 @@ window.__ModuleLoader__.load({
       if (n < 60000) return (n / 1000).toFixed(1) + " s";
       var total = Math.round(n / 1000);
       return Math.floor(total / 60) + " m " + two(total % 60) + " s";
+    }
+    /** Compact duration for the denser capsule/ring/bars rows ("1m01s"). */
+    function durationShort(ms) {
+      var n = Number(ms);
+      if (!Number.isFinite(n) || n < 0) return "—";
+      if (n < 60000) return (n / 1000).toFixed(0) + "s";
+      var total = Math.round(n / 1000);
+      return Math.floor(total / 60) + "m" + String(total % 60).padStart(2, "0") + "s";
     }
     /** Total words shown on the timeline: Chinese characters plus English words. */
     function wordCount(event) {
@@ -1263,6 +1383,148 @@ window.__ModuleLoader__.load({
       return out;
     }
 
+    /** Miniature ring used by the ring style: arc = share of the window. */
+    function timelineRing(size, pct) {
+      var stroke = size <= 10 ? 1.5 : 2;
+      var radius = (size - stroke) / 2;
+      var circumference = 2 * Math.PI * radius;
+      var center = size / 2;
+      var filled = Math.max(0, Math.min(100, Number(pct) || 0));
+      return h("svg", {
+        className: "dsh-tl-ringmini", width: size, height: size,
+        viewBox: "0 0 " + size + " " + size, "aria-hidden": "true",
+      },
+        h("circle", { className: "trk", cx: center, cy: center, r: radius, fill: "none", strokeWidth: stroke }),
+        h("circle", {
+          className: "arc", cx: center, cy: center, r: radius, fill: "none", strokeWidth: stroke, strokeLinecap: "round",
+          strokeDasharray: (circumference * filled / 100).toFixed(2) + " " + circumference.toFixed(2),
+          transform: "rotate(-90 " + center + " " + center + ")",
+        }),
+        h("circle", { className: "core", cx: center, cy: center, r: size <= 10 ? 1 : 1.4 })
+      );
+    }
+
+    /**
+     * The gutter chain, drawn in one of five styles. The pitch and the label
+     * degradation are shared, so a long session shrinks the same way whichever
+     * style is picked; only the row markup differs. Used by the live dock
+     * (with onOpen) and by the settings preview (static sample events).
+     */
+    function TimelineChain(props) {
+      // The gutter dock injects this too, but the settings preview can be the
+      // first surface to render a chain (e.g. before any session with history
+      // is opened), so load it here as well.
+      ensureTimelineStyles();
+      var events = Array.isArray(props.events) ? props.events : [];
+      var style = normalizeTimelineStyle(props.style);
+      var regionH = Math.max(40, Number(props.regionH) || 40);
+      var n = events.length;
+      var eh = 16;
+      var pitch = n > 1 ? Math.min(34, (regionH - eh) / (n - 1)) : 0;
+      if (n > 1 && pitch < 22) { eh = 14; pitch = Math.min(34, (regionH - eh) / (n - 1)); }
+      var labels = n === 1 || pitch >= 18;
+      if (!labels) { eh = 12; pitch = n > 1 ? Math.min(34, (regionH - eh) / (n - 1)) : 0; }
+      var dense = n > 1 && pitch < 13;
+      var total = n > 1 ? (n - 1) * pitch + eh : eh;
+      var off = Math.max(0, (regionH - total) / 2);
+      var maxChars = 1;
+      for (var q = 0; q < n; q += 1) maxChars = Math.max(maxChars, wordCount(events[q]));
+
+      var children = [];
+      // Each style keeps the axis under its own bead column; bars has none.
+      if (style !== "bars") {
+        var railLeft = style === "ember" ? 9 : style === "capsule" ? 10 : 9;
+        children.push(h("i", {
+          key: "rail", className: "dsh-tl-line", "aria-hidden": true,
+          style: { left: railLeft + "px", top: (off + eh / 2) + "px", height: Math.max(0, (n - 1) * pitch) + "px" },
+        }));
+      }
+      if (style === "capsule") {
+        children.push(h("i", {
+          key: "thread", className: "dsh-tl-thread", "aria-hidden": true,
+          style: { top: (off + eh / 2) + "px", height: Math.max(0, (n - 1) * pitch) + "px" },
+        }));
+      }
+
+      events.forEach(function (event, i) {
+        var chars = wordCount(event);
+        var on = i === n - 1;
+        var time = clockOf(event.startedAt);
+        var dur = durationText(event.durationMs);
+        var top = off + i * pitch;
+        var beforeTokens = Number(event.beforeTokens);
+        var windowTokens = Number(event.contextWindow);
+        var contextPct = beforeTokens > 0 && windowTokens > 0 ? beforeTokens / windowTokens * 100 : null;
+        var bead = Math.max(4, Math.min(6 + Math.round(chars / 220), labels ? 12 : Math.max(4, Math.floor(pitch) - 2)));
+        var rowStyle = { top: top + "px", height: eh + "px" };
+        var kids = null;
+
+        if (style === "ember") {
+          kids = [
+            h("span", { key: "n", className: "dsh-tl-node" }, h("i", { className: "dsh-tl-dot", style: { width: bead + "px", height: bead + "px" } })),
+            dense ? null : h("span", { key: "t", className: "dsh-tl-tm" }, time),
+            labels ? h("span", { key: "m", className: "dsh-tl-meta" }, h("b", null, dur), " · " + fmt(chars) + " 字") : null,
+          ];
+        } else if (style === "capsule") {
+          var capH = Math.min(24, eh + 6);
+          rowStyle = { top: (top + (eh - capH) / 2) + "px", height: capH + "px" };
+          var beadOnly = n > 1 && pitch < 22;
+          if (beadOnly) rowStyle.left = "7px";
+          kids = [
+            h("i", { key: "d", className: "dsh-tl-dot", style: { width: 6, height: 6 } }),
+            beadOnly ? null : h("span", { key: "c", className: "dsh-tl-cap" },
+              h("span", { className: "dsh-tl-tm" }, time),
+              labels ? h("span", { className: "dsh-tl-metrics" }, durationShort(event.durationMs) + " · " + fmt(chars) + " 字") : null
+            ),
+          ];
+        } else if (style === "ring") {
+          var size = labels ? 15 : 9;
+          var before = Number(event.beforeTokens);
+          var win = Number(event.contextWindow);
+          var pct = before > 0 && win > 0 ? (before / win) * 100 : 0;
+          kids = [
+            h("span", { key: "r", className: "dsh-tl-node" }, timelineRing(size, pct)),
+            dense ? null : h("span", { key: "t", className: "dsh-tl-tm" }, time),
+            labels ? h("span", { key: "m", className: "dsh-tl-meta" }, h("b", null, durationShort(event.durationMs)), " · " + fmt(chars) + " 字") : null,
+          ];
+        } else if (style === "quiet") {
+          kids = [
+            h("i", { key: "k", className: "dsh-tl-tick" }),
+            dense ? null : h("span", { key: "t", className: "dsh-tl-tm" }, time),
+            h("span", { key: "h", className: "dsh-tl-hover" },
+              h("b", null, time + " · " + dur),
+              h("span", null, fmt(chars) + " 字 · " + triggerShort(event.trigger))
+            ),
+          ];
+        } else {
+          if (!labels) rowStyle.gridTemplateColumns = "minmax(0,1fr)";
+          kids = [
+            labels ? h("span", { key: "t", className: "dsh-tl-tm" }, time) : null,
+            h("span", {
+              key: "b", className: "dsh-tl-track",
+              title: fmt(chars) + " 字" + (contextPct !== null ? " · 触发时占窗口 " + contextPct.toFixed(1) + "%" : ""),
+            },
+              contextPct === null ? null : h("i", { style: { width: Math.max(2, Math.min(100, contextPct)).toFixed(1) + "%" } })
+            ),
+            labels ? h("span", { key: "v", className: "dsh-tl-num" }, fmt(chars) + " 字") : null,
+          ];
+        }
+
+        children.push(h("button", {
+          key: String(event.startedAt || i),
+          type: "button",
+          className: "dsh-tl-ev" + (on ? " on" : "") + (style === "quiet" && props.demoHover === true && on ? " demo" : ""),
+          title: time + " · " + dur + " · " + fmt(chars) + " 字" + (style === "bars" && contextPct !== null ? "（触发时占窗口 " + contextPct.toFixed(1) + "%）" : "") + " · 查看详情",
+          onClick: typeof props.onOpen === "function" ? function () { props.onOpen(i); } : undefined,
+          style: rowStyle,
+        }, kids));
+      });
+
+      // Carry the style class on the chain itself: the gutter dock also sets it
+      // on its panel, but the settings preview mounts the chain standalone.
+      return h("div", { className: "dsh-tl-list dsh-tl--" + style, style: { height: regionH + "px" } }, children);
+    }
+
     function TimelineDock(props) {
       ensureTimelineStyles();
       var connection = props.connection;
@@ -1378,21 +1640,13 @@ window.__ModuleLoader__.load({
       // Same direction as the conversation: oldest at the top, newest at the
       // bottom, so a new compaction lands where the eye already is.
       var ordered = events;
-      // Bead chain inside a fixed centred band: the pitch shrinks as events
-      // accumulate; below the label floor only beads remain and their diameter
-      // yields to the pitch so neighbours never touch.
+      // Bead chain inside a fixed centred band; the chain owns the pitch
+      // degradation so every style shrinks the same way.
       var regionH = Math.max(40, place.regionHeight);
-      var n = ordered.length;
-      var eh = 16;
-      var pitch = n > 1 ? Math.min(34, (regionH - eh) / (n - 1)) : 0;
-      if (n > 1 && pitch < 22) { eh = 14; pitch = Math.min(34, (regionH - eh) / (n - 1)); }
-      var labels = n === 1 || pitch >= 18;
-      if (!labels) { eh = 12; pitch = n > 1 ? Math.min(34, (regionH - eh) / (n - 1)) : 0; }
-      var total = n > 1 ? (n - 1) * pitch + eh : eh;
-      var off = Math.max(0, (regionH - total) / 2);
+      var chainStyle = normalizeTimelineStyle(prefs.style);
 
       var panel = h("div", {
-        className: "dsh-tl" + (place.compact ? " dsh-tl--compact" : ""),
+        className: "dsh-tl dsh-tl--" + chainStyle + (place.compact ? " dsh-tl--compact" : ""),
         "data-dsh-handoff-timeline": "1",
         style: {
           left: place.left + "px",
@@ -1403,31 +1657,7 @@ window.__ModuleLoader__.load({
           "--dsh-tl-time": palette.time,
         },
       },
-        h("div", { className: "dsh-tl-list", style: { height: regionH + "px" } },
-          h("i", {
-            className: "dsh-tl-line",
-            "aria-hidden": true,
-            style: { top: (off + eh / 2) + "px", height: Math.max(0, (n - 1) * pitch) + "px" },
-          }),
-          ordered.map(function (event, i) {
-            var chars = wordCount(event);
-            var bead = Math.max(4, Math.min(6 + Math.round(chars / 220), labels ? 12 : Math.max(4, Math.floor(pitch) - 2)));
-            return h("button", {
-              key: String(event.startedAt || i),
-              type: "button",
-              className: "dsh-tl-ev" + (i === n - 1 ? " on" : ""),
-              title: clockOf(event.startedAt) + " · " + durationText(event.durationMs) + " · " + fmt(chars) + " 字 · 查看详情",
-              onClick: function () { setOpenIndex(i); },
-              style: { top: (off + i * pitch) + "px", height: eh + "px" },
-            },
-              h("span", { className: "dsh-tl-dot", style: { width: bead + "px", height: bead + "px", marginLeft: ((17 - bead) / 2) + "px" } }),
-              labels ? h("span", { className: "dsh-tl-meta" },
-                h("b", null, clockOf(event.startedAt)),
-                h("span", { className: "dsh-tl-metrics" }, " · " + durationText(event.durationMs) + " · " + fmt(chars) + " 字")
-              ) : null
-            );
-          })
-        )
+        h(TimelineChain, { events: ordered, style: chainStyle, regionH: regionH, onOpen: setOpenIndex })
       );
 
       var modal = null;
@@ -1787,7 +2017,7 @@ window.__ModuleLoader__.load({
       if (status.loading) return h("div", { style: { color: C.muted, padding: 18, fontSize: 13 } }, "读取设置中…");
       if (status.error && !draft) return h("div", { style: { color: "var(--dsw-alias-state-warn-primary, #e0b341)", padding: 18, fontSize: 13, lineHeight: 1.8 } }, "无法读取设置：" + status.error);
 
-      var base = draft || { enabled: true, thresholdRatio: 0.9, scope: "global", presets: [], templateFile: "", displayStyle: "orbit", midTaskEnabled: false, midTaskTriggerTokens: MID_TASK_MIN_TRIGGER, suppressFailureHint: false };
+      var base = draft || { enabled: true, thresholdRatio: 0.9, scope: "global", presets: [], templateFile: "", displayStyle: "orbit", timelineStyle: "ember", midTaskEnabled: false, midTaskTriggerTokens: MID_TASK_MIN_TRIGGER, suppressFailureHint: false };
       var enabled = base.enabled !== false;
       var ratio = Math.round((Number(base.thresholdRatio) || 0.9) * 100);
       var scopePreset = base.scope === "preset";
@@ -1797,6 +2027,7 @@ window.__ModuleLoader__.load({
       var themeStyle = normalizeDisplayStyle(base.displayStyle);
       var tlEnabled = base.timelineEnabled !== false;
       var tlPosition = normalizeTimelinePosition(base.timelinePosition);
+      var tlStyle = normalizeTimelineStyle(base.timelineStyle);
       var midEnabled = base.midTaskEnabled === true;
       var midRaw = Number(base.midTaskTriggerTokens);
       var midValue = Number.isFinite(midRaw)
@@ -1839,6 +2070,7 @@ window.__ModuleLoader__.load({
         normalizeDisplayStyle(settings.displayStyle) !== themeStyle ||
         (settings.timelineEnabled !== false) !== tlEnabled ||
         normalizeTimelinePosition(settings.timelinePosition) !== tlPosition ||
+        normalizeTimelineStyle(settings.timelineStyle) !== tlStyle ||
         (settings.midTaskEnabled === true) !== midEnabled ||
         (Number(settings.midTaskTriggerTokens) || MID_TASK_MIN_TRIGGER) !== midValue ||
         (settings.suppressFailureHint === true) !== !hintOn ||
@@ -1856,6 +2088,7 @@ window.__ModuleLoader__.load({
         display: saved !== null && normalizeDisplayStyle(saved.displayStyle) !== themeStyle,
         timeline: saved !== null && (saved.timelineEnabled !== false) !== tlEnabled,
         position: saved !== null && normalizeTimelinePosition(saved.timelinePosition) !== tlPosition,
+        style: saved !== null && normalizeTimelineStyle(saved.timelineStyle) !== tlStyle,
         midTask: saved !== null && (saved.midTaskEnabled === true) !== midEnabled,
         midTrigger: saved !== null && (Number(saved.midTaskTriggerTokens) || MID_TASK_MIN_TRIGGER) !== midValue,
         hint: saved !== null && (saved.suppressFailureHint === true) !== !hintOn,
@@ -1883,6 +2116,7 @@ window.__ModuleLoader__.load({
           displayStyle: themeStyle,
           timelineEnabled: tlEnabled,
           timelinePosition: tlPosition,
+          timelineStyle: tlStyle,
           midTaskEnabled: midEnabled,
           midTaskTriggerTokens: midValue,
           suppressFailureHint: !hintOn,
@@ -1920,6 +2154,17 @@ window.__ModuleLoader__.load({
         }, label);
       };
 
+      var subTitleStyle = { fontSize: 13, fontWeight: 600, color: C.text };
+      var segRowStyle = { display: "flex", gap: 4, flexWrap: "wrap", padding: 3, border: "1px solid " + C.line, borderRadius: 8, background: "transparent", width: "fit-content", maxWidth: "100%", marginTop: 8 };
+      var segButtonStyle = function (active, disabled) {
+        return {
+          display: "inline-flex", alignItems: "center", gap: 6, height: 30, padding: "0 12px",
+          border: 0, borderRadius: 6, background: active ? C.accentSoft : "transparent",
+          boxShadow: active ? "inset 0 0 0 1px " + C.accentLine : "none",
+          color: active ? C.text : C.muted, cursor: disabled ? "not-allowed" : "pointer",
+          font: "inherit", fontSize: 12.5, fontWeight: active ? 600 : 400, whiteSpace: "nowrap",
+        };
+      };
       var offBadgeStyle = { marginLeft: 6, fontSize: 10.5, color: C.muted, background: "rgba(127,133,140,.14)", border: "1px solid " + C.line, borderRadius: 999, padding: "0 6px", lineHeight: "16px", fontWeight: 400 };
       var pendingStyle = { marginLeft: 8, fontSize: 11.5, fontWeight: 400, color: C.error };
 
@@ -1966,22 +2211,70 @@ window.__ModuleLoader__.load({
         ) : null,
 
         h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
-          h("div", null,
-            h("div", { style: labelStyle }, "压缩显示方式", pendingTag(pending.display)),
-            h("div", { style: subStyle }, "选择压缩进行时在会话里的提示样式；保存后下一次压缩生效。")
-          ),
-          h("div", { style: { display: "flex", gap: 4, flexWrap: "wrap", padding: 3, border: "1px solid " + C.line, borderRadius: 8, background: "transparent", width: "fit-content", maxWidth: "100%", marginTop: 9 } },
-            DISPLAY_OPTIONS.map(function (option) {
-              var on = themeStyle === option.id;
-              return h("button", {
-                key: option.id, type: "button",
-                onClick: function () { patch({ displayStyle: option.id }); },
-                "aria-pressed": on ? "true" : "false",
-                style: { display: "inline-flex", alignItems: "center", gap: 6, height: 30, padding: "0 10px", border: 0, borderRadius: 6, background: on ? C.accentSoft : "transparent", boxShadow: on ? "inset 0 0 0 1px " + C.accentLine : "none", color: on ? C.text : C.muted, cursor: "pointer", font: "inherit", fontSize: 12.5, fontWeight: on ? 600 : 400, whiteSpace: "nowrap" },
-              }, h("span", { className: "dsh-handoff-opt dsh-handoff-opt-" + option.id, "aria-hidden": "true" }), option.label);
-            })
-          ),
-          h(ThemePreview, { theme: themeStyle })
+          h("div", { style: labelStyle }, "压缩显示方式"),
+
+          h("div", { style: { marginTop: 11, paddingLeft: 15, borderLeft: "2px solid " + C.line } },
+
+            h("div", null,
+              h("div", { style: subTitleStyle }, "压缩中样式", pendingTag(pending.display)),
+              h("div", { style: segRowStyle },
+                DISPLAY_OPTIONS.map(function (option) {
+                  var on = themeStyle === option.id;
+                  return h("button", {
+                    key: option.id, type: "button",
+                    onClick: function () { patch({ displayStyle: option.id }); },
+                    "aria-pressed": on ? "true" : "false",
+                    style: segButtonStyle(on),
+                  }, h("span", { className: "dsh-handoff-opt dsh-handoff-opt-" + option.id, "aria-hidden": "true" }), option.label);
+                })
+              ),
+              h(ThemePreview, { theme: themeStyle })
+            ),
+
+            h("div", { style: { marginTop: 18 } },
+              h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 } },
+                h("div", { style: subTitleStyle }, "压缩时间线", pendingTag(pending.timeline || pending.position || pending.style)),
+                h(ToggleSwitch, {
+                  checked: tlEnabled,
+                  label: "压缩时间线",
+                  onChange: function (value) { patch({ timelineEnabled: value }); },
+                })
+              ),
+              h("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 11, flexWrap: "wrap", opacity: tlEnabled ? 1 : 0.4 } },
+                h("span", { style: { fontSize: 12, color: C.muted, width: 60, flex: "0 0 auto" } }, "显示位置"),
+                h("div", { style: { display: "inline-flex", flex: "0 0 auto", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
+                  [["chat", "对话区域"], ["tab", "压缩页签"]].map(function (opt) {
+                    var on = tlPosition === opt[0];
+                    return h("button", {
+                      key: opt[0], type: "button",
+                      disabled: !tlEnabled,
+                      "aria-pressed": on ? "true" : "false",
+                      onClick: function () { if (tlEnabled) patch({ timelinePosition: opt[0] }); },
+                      style: segButtonStyle(on, !tlEnabled),
+                    }, opt[1]);
+                  })
+                ),
+                h("span", { style: { fontSize: 11.5, color: C.faint } }, "在「轨迹」之后追加「压缩」页签，不占固定位置")
+              ),
+              h("div", { style: { marginTop: 12, opacity: tlEnabled ? 1 : 0.4 } },
+                h("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6, fontSize: 11, color: C.faint } },
+                  "时间线样式"),
+                h("div", { style: segRowStyle },
+                  TIMELINE_STYLE_OPTIONS.map(function (option) {
+                    var on = tlStyle === option.id;
+                    return h("button", {
+                      key: option.id, type: "button",
+                      disabled: !tlEnabled,
+                      onClick: function () { if (tlEnabled) patch({ timelineStyle: option.id }); },
+                      "aria-pressed": on ? "true" : "false",
+                      style: segButtonStyle(on, !tlEnabled),
+                    }, option.label);
+                  })
+                ),
+                h(TimelineStylePreview, { style: tlStyle })
+              )
+            )
+          )
         ),
 
         h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
@@ -2034,61 +2327,20 @@ window.__ModuleLoader__.load({
             h("div", { style: { display: "flex", justifyContent: "space-between", maxWidth: 420, fontSize: 10.5, color: C.faint, marginTop: 2 } },
               h("span", null, "20,000 最低"),
               h("span", null, fmt(MID_TASK_EXAMPLE_MAX) + " 窗口一半")
-            ),
-            h("div", { style: { marginTop: 8, fontSize: 11.5, color: C.muted, lineHeight: 1.7 } },
-              "剩余 ≤ " + fmt(midValue) + " 时压缩 ≈ 已用 " + fmt(midUsed) + " / " + fmt(EXAMPLE_WINDOW) +
-              "。实际窗口按当前模型读取，上限自动钳到窗口一半；压缩发生在两步之间，不打断任务。")
+            )
           ) : h("div", { style: { marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(210,153,34,.12)", border: "1px solid rgba(210,153,34,.34)", fontSize: 11.5, color: C.muted, lineHeight: 1.65 } },
             "只等任务结束再压缩，就可能出现「最后一轮几乎用尽窗口、写摘要反而没有余量」的情况；开启本项可把压缩提前到两步之间。")
         ),
 
         h("div", { style: rowStyle },
           h("div", null,
-            h("div", { style: labelStyle }, "压缩失败提示", pendingTag(pending.hint)),
-            h("div", { style: subStyle }, "因余量不足压缩失败时，在窗口中间说明原因，并引导开启或调高「任务中途压缩」；关闭后不再弹窗，失败仍会记入状态。")
+            h("div", { style: labelStyle }, "压缩失败提示", pendingTag(pending.hint))
           ),
           h(ToggleSwitch, {
             checked: hintOn,
             label: "压缩失败提示",
             onChange: function (value) { patch({ suppressFailureHint: !value }); },
           })
-        ),
-
-        h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
-          h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 } },
-            h("div", null,
-              h("div", { style: labelStyle }, "压缩时间线", pendingTag(pending.timeline)),
-              h("div", { style: subStyle }, tlEnabled
-                ? "把每次压缩的时间、用时和字数显示在会话里，点击可查看摘要全文。"
-                : "已关闭：不显示时间线，也不新增「压缩」页签；压缩历史仍会记录在磁盘上。")
-            ),
-            h(ToggleSwitch, {
-              checked: tlEnabled,
-              label: "压缩时间线",
-              onChange: function (value) { patch({ timelineEnabled: value }); },
-            })
-          ),
-          h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, marginTop: 11, opacity: tlEnabled ? 1 : 0.4 } },
-            h("span", { style: { fontSize: 12.5, color: C.text, fontWeight: 500 } }, "显示位置", pendingTag(pending.position)),
-            h("div", { style: { display: "inline-flex", flex: "0 0 auto", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
-              [["chat", "对话区域"], ["tab", "压缩页签"]].map(function (opt) {
-                var on = tlPosition === opt[0];
-                return h("button", {
-                  key: opt[0], type: "button",
-                  disabled: !tlEnabled,
-                  "aria-pressed": on ? "true" : "false",
-                  onClick: function () { if (tlEnabled) patch({ timelinePosition: opt[0] }); },
-                  style: { border: 0, cursor: tlEnabled ? "pointer" : "not-allowed", font: "inherit", fontSize: 12.5, padding: "7px 14px", background: on ? C.accentSoft : "transparent", boxShadow: on ? "inset 0 0 0 1px " + C.accentLine : "none", color: on ? C.text : C.muted, fontWeight: on ? 600 : 400, whiteSpace: "nowrap" },
-                }, opt[1]);
-              })
-            )
-          ),
-          h("div", { style: Object.assign({}, subStyle, { marginTop: 7 }) }, tlEnabled
-            ? (tlPosition === "chat"
-              ? "珠链挂在「对话」正文左侧空槽，随会话常驻；切到「轨迹」自动隐藏。"
-              : "在「轨迹」和其它插件页签之后追加「压缩」页签，不占固定位置；集中浏览压缩记录与摘要。")
-            : "时间线已关闭，显示位置暂不生效。"),
-          h("div", { style: { fontSize: 11.5, color: C.faint, marginTop: 8 } }, "保存后即时生效，无需重启；关闭仅隐藏显示，压缩历史仍会记录在磁盘上。")
         ),
 
         h("div", { style: rowStyle },
@@ -2285,6 +2537,7 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     // Exposed for the structure test: renders the tab view with a fake React.
     exports.CompactionTabView = CompactionTabView;
+    exports.TimelineChain = TimelineChain;
     exports.Section = Section;
     exports.FailureHint = FailureHint;
     return module.exports;
