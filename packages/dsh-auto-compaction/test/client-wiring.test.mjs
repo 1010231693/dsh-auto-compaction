@@ -88,7 +88,8 @@ test("bundle loads through the ModuleLoader wrapper", () => {
 
 test("exports the name and inject list the host expects", () => {
   assert.equal(api.name, "dsh-auto-compaction");
-  assert.deepEqual(api.inject, ["slots", "connection"]);
+  // `locale` is what makes the page follow the DSH language switch.
+  assert.deepEqual(api.inject, ["slots", "connection", "locale"]);
 });
 
 test("apply registers the settings, dock and conversation-view slots", () => {
@@ -119,15 +120,18 @@ test("the conversation-view callback registers no tab by default and cleans up",
   assert.doesNotThrow(() => dispose());
 });
 
+/* Every component calls useLocaleRevision() first, so its useState slot leads
+ * the queue: state values below start at index 1. */
+
 test("tab view renders the loading state before history arrives", () => {
-  stateQueue = [[], -1, false];
+  stateQueue = [0, [], -1, false];
   const tree = api.CompactionTabView({ connection: null, sessionId: "s1" });
   assert.equal(tree.props.className, "dsh-ct-empty");
   assert.match(textOf(tree), /读取压缩记录中/);
 });
 
 test("tab view renders the empty state with guidance", () => {
-  stateQueue = [[], -1, true];
+  stateQueue = [0, [], -1, true];
   const tree = api.CompactionTabView({ connection: null, sessionId: "s1" });
   assert.equal(tree.props.className, "dsh-ct-empty");
   const text = textOf(tree);
@@ -136,7 +140,7 @@ test("tab view renders the empty state with guidance", () => {
 });
 
 test("tab view renders the master-detail layout for a compaction event", () => {
-  stateQueue = [[SAMPLE_EVENT], -1, true];
+  stateQueue = [0, [SAMPLE_EVENT], -1, true];
   const tree = api.CompactionTabView({ connection: null, sessionId: "s1" });
   assert.equal(tree.props.className, "dsh-ct");
   assert.equal(tree.children.length, 2);
@@ -167,7 +171,7 @@ test("tab view renders the master-detail layout for a compaction event", () => {
 });
 
 test("mid-task compaction is labelled as mid-turn, not idle", () => {
-  stateQueue = [[Object.assign({}, SAMPLE_EVENT, { trigger: "midtask" })], -1, true];
+  stateQueue = [0, [Object.assign({}, SAMPLE_EVENT, { trigger: "midtask" })], -1, true];
   const tree = api.CompactionTabView({ connection: null, sessionId: "s1" });
   const text = textOf(tree);
   assert.match(text, /自动（任务中途）/);
@@ -208,7 +212,7 @@ const INVENTORY = {
 };
 
 function renderSection(draft) {
-  stateQueue = [SAVED, draft, { loading: false, error: "", saving: false, saved: false },
+  stateQueue = [0, SAVED, draft, { loading: false, error: "", saving: false, saved: false },
     { loading: false, error: "", value: INVENTORY }, 0, null];
   return api.Section({ connection: {}, sessionId: "s1" });
 }
@@ -284,6 +288,7 @@ const CHAIN_EVENTS = [
   { startedAt: 1794302000000, durationMs: 61000, cjk: 2049, words: 0, beforeTokens: 240000, contextWindow: 250000, trigger: "manual" },
 ];
 function renderChain(style, regionH) {
+  stateQueue = [0];
   return api.TimelineChain({ events: CHAIN_EVENTS, style, regionH: regionH || 300, onOpen: () => {} });
 }
 function chainRows(tree) {
@@ -360,7 +365,7 @@ const RAISE_HINT = {
 };
 
 function renderHint(hint, prefs) {
-  stateQueue = [hint, prefs, 0, false, false];
+  stateQueue = [0, hint, prefs, 0, false, false];
   return api.FailureHint({ connection: {}, sessionId: "s1" });
 }
 
@@ -385,9 +390,160 @@ test("failure hint stays hidden when notices are off or already cleared", () => 
   assert.equal(renderHint(Object.assign({}, RAISE_HINT, { at: 500 }), { hintClearedAt: 1000 }), null);
 });
 
+/* ---- UI language ---- */
+
+/* Runs apply() with a fake ctx.locale, the same seam the host uses. Returns the
+ * RPC calls the bundle made, so the mirror to the node half is observable. */
+function enableLocale(active) {
+  const calls = [];
+  const locale = {
+    getSnapshot: () => ({ active, revision: 1 }),
+    subscribe: () => () => {},
+    register: () => () => {},
+  };
+  const connection = {
+    rpc: { call: (channel, endpoint, payload) => { calls.push({ channel, endpoint, payload }); return Promise.resolve({ ok: true, value: {} }); } },
+  };
+  api.apply({
+    connection,
+    slots: { inject: () => {}, register: () => () => {} },
+    locale,
+    effect: (fn) => { const dispose = fn(); return typeof dispose === "function" ? dispose : () => {}; },
+  });
+  return calls;
+}
+
+test("an English UI renders the settings page in English", () => {
+  enableLocale("en");
+  try {
+    const text = textOf(renderSection(SAVED));
+    assert.match(text, /Enable plugin/);
+    assert.match(text, /Mid-task compaction/);
+    assert.doesNotMatch(text, /启用插件/);
+    assert.doesNotMatch(text, /任务中途压缩/);
+  } finally {
+    enableLocale("zh");
+  }
+  assert.match(textOf(renderSection(SAVED)), /启用插件/);
+});
+
+test("an English timeline counts English words only", () => {
+  const event = Object.assign({}, CHAIN_EVENTS[2], { cjk: 100, words: 1204 });
+  enableLocale("en");
+  try {
+    stateQueue = [0];
+    const en = textOf(api.TimelineChain({ events: [event], style: "ember", regionH: 300 }));
+    assert.match(en, /1,204 words/);
+    assert.doesNotMatch(en, /字/);
+  } finally {
+    enableLocale("zh");
+  }
+  stateQueue = [0];
+  const zh = textOf(api.TimelineChain({ events: [event], style: "ember", regionH: 300 }));
+  assert.match(zh, /1,304 字/);
+});
+
+test("English rows use 12-hour time, Chinese keeps 24-hour", () => {
+  enableLocale("en");
+  try {
+    stateQueue = [0];
+    const en = textOf(api.TimelineChain({ events: [CHAIN_EVENTS[2]], style: "ember", regionH: 300 }));
+    assert.match(en, /\d{1,2}:\d{2} (AM|PM)/);
+    assert.doesNotMatch(en, /\d{2}:\d{2}:\d{2}/);
+  } finally {
+    enableLocale("zh");
+  }
+  stateQueue = [0];
+  const zh = textOf(api.TimelineChain({ events: [CHAIN_EVENTS[2]], style: "ember", regionH: 300 }));
+  assert.match(zh, /\d{2}:\d{2}:\d{2}/);
+});
+
+test("the UI language is mirrored to the node half", () => {
+  const calls = enableLocale("en");
+  try {
+    const pref = calls.filter((c) => c.endpoint === "pref").pop();
+    assert.ok(pref, "pref RPC called");
+    assert.equal(pref.payload.uiLocale, "en");
+  } finally {
+    enableLocale("zh");
+  }
+});
+
+test("slot labels follow the language", () => {
+  function captureLabel(active) {
+    let label;
+    const locale = {
+      getSnapshot: () => ({ active, revision: 1 }),
+      subscribe: () => () => {},
+      register: () => () => {},
+    };
+    api.apply({
+      connection: undefined,
+      slots: {
+        inject: (name, cb) => { if (name === "settings.section") cb(); },
+        register: (opts) => { if (opts.name === "settings.section") label = opts.label; return () => {}; },
+      },
+      locale,
+      effect: (fn) => { fn(); },
+    });
+    return label;
+  }
+  assert.equal(captureLabel("en")(), "Session Compaction");
+  assert.equal(captureLabel("zh")(), "会话压缩");
+});
+
+/* Static guard: the 0.4.x page hardcoded every string, which is exactly how it
+ * ended up with no English at all. These two checks keep that from creeping
+ * back: no bare Chinese literal outside the dictionary, and every msgid the
+ * page asks for actually has an English entry. */
+const EN_BLOCK_START = source.indexOf("var EN = {");
+const EN_BLOCK_END = source.indexOf("\n    };", EN_BLOCK_START);
+const EN_BLOCK = EN_BLOCK_START >= 0 && EN_BLOCK_END > EN_BLOCK_START
+  ? source.slice(EN_BLOCK_START, EN_BLOCK_END)
+  : "";
+/* Preset names come from the user's own DSH presets and the settings preview
+ * shows one verbatim, so it is deliberately untranslated. */
+const UNTRANSLATED = new Set(["轻量本地"]);
+
+test("the English dictionary is complete for every msgid the page uses", () => {
+  assert.ok(EN_BLOCK.length > 0, "dictionary block found");
+  const keys = new Set();
+  for (const match of EN_BLOCK.matchAll(/^\s{6}"((?:[^"\\]|\\.)*)":/gm)) keys.add(match[1]);
+  assert.ok(keys.size > 150, `dictionary has ${keys.size} keys`);
+  const msgids = new Set();
+  for (const match of source.matchAll(/\bt\("((?:[^"\\]|\\.)*)"/g)) msgids.add(match[1]);
+  for (const match of source.matchAll(/\btn\(\s*[^,]+,\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"/g)) {
+    msgids.add(match[1]);
+    msgids.add(match[2]);
+  }
+  const missing = [...msgids].filter((id) => !keys.has(id) && !UNTRANSLATED.has(id));
+  assert.deepEqual(missing, [], "msgids without an English translation");
+});
+
+test("no bare Chinese literal is left outside the dictionary", () => {
+  const lines = source.split(/\r?\n/);
+  const tableLine = /^\s+\{ id: "[a-z]+", (label|desc): "/;
+  const offenders = [];
+  let inDictionary = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!inDictionary && line.includes("var EN = {")) { inDictionary = true; continue; }
+    if (inDictionary) {
+      if (/^\s{4}\};$/.test(line)) inDictionary = false;
+      continue;
+    }
+    if (!/[\u4e00-\u9fff]/.test(line)) continue;
+    if (tableLine.test(line)) continue;
+    if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+    if (/\bt\(|tn\(/.test(line)) continue;
+    offenders.push(`${i + 1}: ${line.trim()}`);
+  }
+  assert.deepEqual(offenders, [], "hardcoded Chinese outside t()/tn()");
+});
+
 let failed = 0;
 for (const { name, fn } of cases) {
-  stateQueue = [];
+  stateQueue = [0];
   try { await fn(); console.log(`ok   ${name}`); }
   catch (error) { failed += 1; console.log(`FAIL ${name}\n     ${error.message}`); }
 }

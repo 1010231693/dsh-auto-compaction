@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-compaction",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -15,6 +15,7 @@
   "dsh": {
     "client": {
       "inject": [
+        "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-conversation"
       ],
@@ -51,6 +52,6 @@
     "access": "public"
   },
   "dependencies": {
-    "dsh-auto-compaction-engine": "^0.3.1"
+    "dsh-auto-compaction-engine": "^0.5.0"
   }
 }

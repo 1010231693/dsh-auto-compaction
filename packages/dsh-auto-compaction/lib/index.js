@@ -39,7 +39,10 @@ export const Config = z.object({
 
 const DIR = join(homedir(), ".dsh-handoff-compaction");
 const SETTINGS_FILE = join(DIR, "settings.json");
+// One template file per UI language; `template.md` stays the Chinese one so an
+// existing customised file keeps working, `template.en.md` is its English twin.
 const TEMPLATE_FILE = join(DIR, "template.md");
+const TEMPLATE_FILE_EN = join(DIR, "template.en.md");
 const UI_LOG = join(DIR, "ui.log");
 const STATUS_DIR = process.env.DSH_HANDOFF_STATUS_DIR || join(DIR, "status");
 const HISTORY_DIR = process.env.DSH_HANDOFF_HISTORY_DIR || join(DIR, "history");
@@ -109,6 +112,26 @@ function normalizeDocFontSize(value) {
   const size = Number(value);
   if (!Number.isFinite(size)) return DOC_FONT_DEFAULT;
   return Math.max(DOC_FONT_MIN, Math.min(DOC_FONT_MAX, Math.round(size)));
+}
+
+/**
+ * UI language reported by the client half (`ctx.locale`). The engine and this
+ * card are both node-side, so the choice travels through settings.json; an
+ * unknown or missing value means "Chinese", the only language that existed
+ * before the switch, and it is what a headless install keeps using.
+ */
+function normalizeUiLocale(value) {
+  const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (text.startsWith("en")) return "en";
+  if (text.startsWith("zh")) return "zh";
+  return "";
+}
+
+/** The template actually read by the engine: explicit config wins. */
+function effectiveTemplateFile(locale, configured) {
+  const text = String(configured ?? "").trim();
+  if (text.length > 0) return text;
+  return locale === "en" ? TEMPLATE_FILE_EN : TEMPLATE_FILE;
 }
 
 function normalize(config) {
@@ -307,6 +330,8 @@ function sanitize(payload) {
     midTaskEnabled: payload?.midTaskEnabled === true,
     suppressFailureHint: payload?.suppressFailureHint === true,
   };
+  const locale = normalizeUiLocale(payload?.uiLocale);
+  if (locale) next.uiLocale = locale;
   // Absent/blank means "follow the row default", so the key is dropped rather
   // than pinning a number that would outlive a future row change.
   if (Number.isInteger(cap) && cap >= MIN_SUMMARY_TOKENS) next.summaryMaxTokens = cap;
@@ -338,6 +363,31 @@ function settingsPayload(stored) {
     suppressFailureHint: stored?.suppressFailureHint,
     hintClearedAt: stored?.hintClearedAt,
     docFontSize: stored?.docFontSize,
+    uiLocale: stored?.uiLocale,
+  };
+}
+
+/**
+ * One shape for every RPC reply that carries settings: normalized fields plus
+ * the locale-derived template paths the page shows but never stores back.
+ */
+async function settingsView(stored) {
+  const value = stored ?? {};
+  const locale = normalizeUiLocale(value.uiLocale) || "zh";
+  return {
+    ...value,
+    enabled: value.enabled !== false,
+    displayStyle: normalizeDisplayStyle(value.displayStyle),
+    timelineEnabled: value.timelineEnabled !== false,
+    timelinePosition: normalizeTimelinePosition(value.timelinePosition),
+    timelineStyle: normalizeTimelineStyle(value.timelineStyle),
+    docFontSize: normalizeDocFontSize(value.docFontSize),
+    uiLocale: locale,
+    // `templateFile` stays whatever the user typed (empty = follow the UI
+    // language); these two derived paths are what the engine actually reads.
+    activeTemplateFile: effectiveTemplateFile(locale, value.templateFile),
+    defaultTemplate: effectiveTemplateFile(locale, ""),
+    defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS,
   };
 }
 
@@ -360,7 +410,8 @@ export function apply(ctx, config = {}) {
     trace("takeover mount threw: " + (error instanceof Error ? error.message : String(error)));
     ctx.logger?.warn?.(`[handoff-ui] takeover mount failed: ${error instanceof Error ? error.message : String(error)}`);
   });
-  void handleOpen(ctx, config.openTemplate, seeded.templateFile || TEMPLATE_FILE).catch((error) => {
+  const initialTemplate = effectiveTemplateFile(readSettings()?.uiLocale === "en" ? "en" : "zh", seeded.templateFile);
+  void handleOpen(ctx, config.openTemplate, initialTemplate).catch((error) => {
     ctx.logger?.warn?.(`[handoff-ui] openTemplate failed: ${error instanceof Error ? error.message : String(error)}`);
   });
 
@@ -403,44 +454,44 @@ export function apply(ctx, config = {}) {
             };
           }
           if (endpoint === "get") {
-            const stored = readSettings() ?? seeded;
-            return {
-              ok: true,
-              value: {
-                ...stored,
-                enabled: stored.enabled !== false,
-                displayStyle: normalizeDisplayStyle(stored.displayStyle),
-                timelineEnabled: stored.timelineEnabled !== false,
-                timelinePosition: normalizeTimelinePosition(stored.timelinePosition),
-                timelineStyle: normalizeTimelineStyle(stored.timelineStyle),
-                docFontSize: normalizeDocFontSize(stored.docFontSize),
-                defaultTemplate: TEMPLATE_FILE,
-                defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS,
-              },
-            };
+            return { ok: true, value: await settingsView(readSettings() ?? seeded) };
           }
           if (endpoint === "set") {
-            // The settings page owns every field except the document font
-            // size, which is adjusted from the timeline; carrying the stored
-            // value keeps a save from silently resetting it.
+            // The settings page owns every field except the document font size
+            // and the UI locale, which are adjusted elsewhere; carrying the
+            // stored values keeps a save from silently resetting them.
             const next = sanitize({ ...settingsPayload(readSettings() ?? {}), ...payload });
             trace("set " + JSON.stringify(next));
             writeSettings(ctx, next);
             // No rewriting of preset files: the engine applies the switch and
             // the scope per preset at decision time, so a save is live at the
             // next idle check and uninstalling still leaves nothing behind.
-            return { ok: true, value: { ...next, defaultTemplate: TEMPLATE_FILE, defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS } };
+            return { ok: true, value: await settingsView(next) };
           }
           if (endpoint === "pref") {
-            // Single-field UI preference (currently the document font size),
-            // merged into the stored settings so it survives restarts without
-            // the timeline having to replay fields it does not own.
-            const patch = settingsPayload(readSettings() ?? seeded);
+            // Single-field UI preference (the document font size and the UI
+            // language), merged into the stored settings so it survives a
+            // restart without the caller having to replay fields it does not own.
+            const stored = readSettings() ?? seeded;
+            const patch = settingsPayload(stored);
+            const before = JSON.stringify(patch);
             if (payload?.docFontSize !== undefined) patch.docFontSize = payload.docFontSize;
+            if (payload?.uiLocale !== undefined) patch.uiLocale = payload.uiLocale;
             const next = sanitize(patch);
-            trace("pref " + JSON.stringify({ docFontSize: next.docFontSize }));
-            writeSettings(ctx, next);
-            return { ok: true, value: { docFontSize: normalizeDocFontSize(next.docFontSize) } };
+            // The client mirrors the language on every start; rewriting an
+            // unchanged file would just churn the engine's mtime cache.
+            if (JSON.stringify(patch) !== before) {
+              trace("pref " + JSON.stringify({ docFontSize: next.docFontSize, uiLocale: next.uiLocale }));
+              writeSettings(ctx, next);
+            }
+            return {
+              ok: true,
+              value: {
+                docFontSize: normalizeDocFontSize(next.docFontSize),
+                uiLocale: normalizeUiLocale(next.uiLocale) || "zh",
+                activeTemplateFile: effectiveTemplateFile(normalizeUiLocale(next.uiLocale) || "zh", next.templateFile),
+              },
+            };
           }
           if (endpoint === "fix" || endpoint === "ackHint") {
             // One-click repair from the failure dialog. Merged into the stored
@@ -460,7 +511,7 @@ export function apply(ctx, config = {}) {
             const next = sanitize(patch);
             trace(endpoint + " " + JSON.stringify({ action: payload?.action, tokens: payload?.tokens, suppress: payload?.suppress }));
             writeSettings(ctx, next);
-            return { ok: true, value: { ...next, defaultTemplate: TEMPLATE_FILE, defaultSummaryMaxTokens: (await readRowMaxTokens()) ?? FALLBACK_SUMMARY_TOKENS } };
+            return { ok: true, value: await settingsView(next) };
           }
           if (endpoint === "scope") {
             const stored = readSettings() ?? seeded;
@@ -483,7 +534,9 @@ export function apply(ctx, config = {}) {
           }
           if (endpoint === "open") {
             trace("open " + JSON.stringify(payload));
-            return await handleOpen(ctx, String(payload?.kind ?? "file") + ":" + Date.now(), String(payload?.path ?? "") || TEMPLATE_FILE);
+            const stored = readSettings() ?? seeded;
+            const fallback = effectiveTemplateFile(normalizeUiLocale(stored.uiLocale) || "zh", stored.templateFile);
+            return await handleOpen(ctx, String(payload?.kind ?? "file") + ":" + Date.now(), String(payload?.path ?? "") || fallback);
           }
           return { ok: false, error: { code: "auto-compaction/bad-request", message: "unknown endpoint: " + String(endpoint) } };
         } catch (error) {

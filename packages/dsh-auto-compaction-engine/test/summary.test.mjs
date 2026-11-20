@@ -64,6 +64,32 @@ test("retry instructions name the missing sections", () => {
   assert.match(rewriteInstruction(validation, 12_288), /12288/);
 });
 
+test("retry instructions follow the English template when asked", () => {
+  const validation = { missing: ["Key Technical Concepts", "Files and Code"] };
+  const continued = continuationInstruction(validation, "en");
+  assert.match(continued, /Continue it from the exact break point/);
+  assert.match(continued, /Key Technical Concepts, Files and Code/);
+  const rewrite = rewriteInstruction(validation, 12_288, "en");
+  assert.match(rewrite, /incomplete/);
+  assert.match(rewrite, /12288/);
+  assert.doesNotMatch(rewrite, /交接文档/);
+});
+
+test("a Chinese template keeps Chinese retry instructions", () => {
+  const continued = continuationInstruction({ missing: ["当前工作"] }, "zh");
+  assert.match(continued, /交接文档/);
+  assert.match(continued, /当前工作/);
+});
+
+test("truncation markers are detected in both languages", () => {
+  assert.equal(looksTruncated("## A\n- x（截断）"), true);
+  assert.equal(looksTruncated("## A\n- x (truncated)"), true);
+  assert.equal(looksTruncated("## A\n- x [truncated]"), true);
+  assert.equal(looksTruncated("## A\n- x"), false);
+  assert.equal(stripTruncationMarkers("## A\n- x (truncated)"), "## A\n- x");
+  assert.equal(stripTruncationMarkers("## A\n- x（截断）"), "## A\n- x");
+});
+
 let failed = 0;
 for (const { name, fn } of cases) {
   try { fn(); console.log(`ok   ${name}`); }

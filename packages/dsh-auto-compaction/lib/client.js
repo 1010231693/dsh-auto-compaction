@@ -18,8 +18,282 @@ window.__ModuleLoader__.load({
     var h = React.createElement;
 
     var name = "dsh-auto-compaction";
-    var inject = ["slots", "connection"];
+    var NS = "dsh-auto-compaction";
+    var inject = ["slots", "connection", "locale"];
     var CHANNEL = "/dsh-auto-compaction";
+
+    /* ---------- UI language ----------
+     * The host owns the switch (Settings → General). ctx.locale hands this bundle
+     * the active language and notifies on change; the same value is forwarded to
+     * the node half, which picks the summary template with it.
+     *
+     * English copy is keyed by the Chinese source string (gettext style). The
+     * Chinese side then needs no table at all -- a miss renders the source --
+     * and every new string shows up in English mode as Chinese instead of as a
+     * bare key, which is the loud failure we want. */
+    var EN = {
+      /* 设置页 */
+      "会话压缩": "Session Compaction",
+      "压缩": "Compaction",
+      "启用插件": "Enable plugin",
+      "已停用": "Disabled",
+      "达到触发点后，等 agent 空闲时把历史折叠成一份摘要；压缩由本插件接管。": "After the trigger point is reached, compaction waits until the agent is idle, then folds the oldest history into a single summary. This plugin takes compaction over.",
+      "关闭后压缩交回 DSH 原生实现：按原生阈值自动折叠，也可继续用 /compact 手动压缩。": "When off, compaction returns to DSH's built-in implementation: it folds at the native threshold, and /compact still works.",
+      "生效范围": "Applies to",
+      "全局": "All presets",
+      "预设": "Selected presets",
+      "只有勾选的预设由插件压缩，其余预设保持 DSH 自带行为": "Only the selected presets are compacted by this plugin; every other preset keeps DSH's built-in behaviour.",
+      "所有能被本插件接入的预设都由插件压缩，共用这份设置": "Every preset this plugin can take over is compacted by it, sharing these settings.",
+      "未命名预设": "Untitled preset",
+      "正在向 DSH 读取预设名单…": "Loading agent presets from DSH…",
+      "读取预设名单失败：": "Could not load the preset list: ",
+      "。重新打开本页会再读一次。": ". Reopen this page to read it again.",
+      "本插件还没接入任何预设。重启一次 DSH 会重新接入；仍未出现预设名单说明 DSH 没有返回预设。": "This plugin has not taken over any preset yet. Restart DSH to retry; if the list stays empty, DSH returned no presets.",
+      "压缩显示方式": "Compaction display",
+      "压缩中样式": "Progress indicator",
+      "轨道环": "Orbit ring",
+      "状态条": "Status bar",
+      "进度环": "Progress ring",
+      "顶部条": "Top bar",
+      "右上角": "Corner card",
+      "压缩时间线": "Compaction timeline",
+      "显示位置": "Shown in",
+      "对话区域": "Chat area",
+      "压缩页签": "Compaction tab",
+      "在「轨迹」之后追加「压缩」页签，不占固定位置": "Adds a Compaction tab after Trace; it appends last instead of taking a fixed slot.",
+      "时间线样式": "Timeline style",
+      "火种刻度": "Ember ticks",
+      "胶囊流": "Capsule flow",
+      "环相": "Phase rings",
+      "静默刻度": "Quiet ticks",
+      "比例柱": "Proportional bars",
+      "时间右对齐、珠在轴上，像一条日志轴；信息密度最高。": "Time right-aligned with beads on the axis, like a log rail; the densest of the five.",
+      "每次压缩一枚胶囊，最新一枚实心橙；点击面积最大。": "One capsule per compaction, the newest one solid orange; the largest click target.",
+      "每颗珠是一个进度环，弧长表示触发时占窗口的比例。": "Each bead is a ring whose arc shows how full the context was when compaction fired.",
+      "默认只有火线与时间，悬停展开用时、字数与触发方式。": "Just the rail and the time by default; hover reveals duration, length and trigger.",
+      "把摘要字数画成横向条，一眼看出哪次压得狠。": "Draws the summary length as a bar, so you can see at a glance which compaction saved the most.",
+      " · 推荐": " · Recommended",
+      "任务中途压缩": "Mid-task compaction",
+      "每一步开始前测一次余量；低于触发余量就先折叠历史，再继续当前任务。": "Checks the remaining space before every step; below the trigger margin it folds history first, then continues the task.",
+      "默认关闭：只在任务结束后压缩。开启后每一步开始前测一次余量，不足就先压缩再继续。": "Off by default: compaction only waits for the task to end. When on, every step starts with a headroom check and compacts first if space is short.",
+      "任务中途压缩触发余量": "Mid-task trigger margin",
+      "压缩失败提示": "Failure alerts",
+      "压缩触发点": "Compaction trigger point",
+      "压缩触发点百分比": "Compaction trigger point (percent)",
+      /*EN1*/
+      "上下文占用达到这个比例后，等当前这轮回答结束再压缩": "Once the context reaches this share, compaction waits for the current answer to finish.",
+      "（已封顶，再往上不会更晚触发）": " (capped — a higher share cannot trigger later)",
+      "摘要上限": "Summary output cap",
+      "摘要上限 tokens": "Summary output cap (tokens)",
+      "请输入整数 tokens。": "Enter a whole number of tokens.",
+      "最低 8,192 tokens：再小摘要装不下模板小节，会反复触发续写。": "Minimum 8,192 tokens: below that the summary cannot fit every template section and keeps needing continuations.",
+      "恢复默认": "Restore default",
+      "摘要模板": "Summary template",
+      "压缩时让模型按这份模板写摘要；每次压缩时读取，改完不用重启。此插件模板完全基于 DSH 原生压缩模板的中文翻译版，若需要撤销自己的修改，只需要从磁盘删除该模板文件，然后重启 DSH，模板会自动重建。": "The model writes the summary in this template's structure. It is re-read at every compaction, so edits apply without a restart. The bundled template is a straight Chinese translation of DSH's built-in one; to undo your own edits, delete the file and restart DSH — it is rebuilt from the built-in template.",
+      "模板文件路径": "Template file path",
+      "打开文件": "Open file",
+      "所在文件夹": "Open folder",
+      "留空按界面语言使用默认路径（中文 template.md、英文 template.en.md）；文件不存在时引擎会按内置模板生成一份。": "Leave empty to use the per-language default (template.md for Chinese, template.en.md for English); if the file is missing the engine writes one from the built-in template.",
+      "它是怎么压缩的": "How it compacts",
+      "到点后不立即动手，等 agent 结束当前回合。": "It does not act the moment the point is reached — it waits for the agent to finish the turn.",
+      "写摘要时会复用会话已算过的上下文（命中缓存），不重新全量计算历史。": "The summary reuses the context this conversation already computed (a cache hit) instead of re-reading the whole history.",
+      "只替换最旧的这一段历史，换成一条摘要；最近约 16% 窗口的原文逐字留着，切点也不会把工具调用和它的结果拆开。": "Only the oldest stretch is replaced, by one summary. The most recent ~16% of the window stays verbatim, and the cut never splits a tool call from its result.",
+      "下一轮 = 系统提示词 + 工具定义 + 这条摘要 + 那段逐字保留的最近消息；旧消息仍在会话日志里，可用回滚功能恢复。": "The next turn is the system prompt + tool definitions + this summary + the verbatim tail; the old messages stay in the session log and can be restored with rewind.",
+      "手动压缩：会话里发送 /compact 可随时折叠一次，不受这个比例限制。": "Manual compaction: send /compact in the conversation at any time; it ignores this ratio.",
+      "保存": "Save",
+      "保存中…": "Saving…",
+      "撤销改动": "Discard changes",
+      "已保存，下次判定生效": "Saved — applies at the next check",
+      "已打开": "Opened",
+      "（保存后生效）": " (applies after saving)",
+      "读取设置中…": "Loading settings…",
+      "无法读取设置：": "Could not load settings: ",
+      "连接服务不可用": "Connection service unavailable",
+      /* 运行时提示 */
+      "正在压缩历史会话": "Compacting conversation history",
+      "正在压缩历史会话…": "Compacting conversation history…",
+      "正在补全摘要": "Completing the summary",
+      "正在从头重写摘要": "Rewriting the summary",
+      "压缩完成": "Compaction complete",
+      "压缩可能已中断（超时）· 历史未改动": "Compaction may have been interrupted (timeout) · history unchanged",
+      "摘要生成失败 · 历史未改动": "Summary generation failed · history unchanged",
+      "摘要不完整，已放弃提交 · 下次空闲重试": "Summary incomplete — commit aborted · retries when idle",
+      "压缩已取消 · 下次空闲重试": "Compaction cancelled · retries when idle",
+      "没有需要压缩的历史": "Nothing to compact",
+      "旧消息仍可用回滚功能恢复": "Old messages are still available through rewind",
+      "下次空闲重试": "retries when idle",
+      "下一次空闲会重新尝试": "Retried at the next idle moment",
+      "压缩期间发送的消息会排队": "Messages sent during compaction are queued",
+      "期间发送的消息会排队": "Messages you send during compaction are queued",
+      "取消压缩（历史保持原样，排队的消息会保留）": "Cancel compaction (history unchanged, queued messages kept)",
+      "取消": "Cancel",
+      "关闭": "Close",
+      "关闭状态提示": "Dismiss",
+      "完成后把最旧的这段历史收成一条摘要": "When it finishes, this oldest stretch of history becomes a single summary.",
+      /*EN2*/
+      /* 时间线与详情 */
+      "压缩用时": "Duration",
+      "触发方式": "Trigger",
+      "摘要": "Summary",
+      "摘要输出": "Summary output",
+      "替换历史": "History replaced",
+      "模型": "Model",
+      "压缩详情": "Compaction details",
+      "触发时上下文": "Context at trigger",
+      "占窗口": "Of window",
+      "摘要全文": "Full summary",
+      "缩小摘要字号": "Decrease summary font size",
+      "放大摘要字号": "Increase summary font size",
+      "字数与时长为插件本地计算；tokens 取 DSH usage 与摘要调用 usage，不额外消耗模型算力。": "Word counts and durations are computed locally; tokens come from DSH usage and the summary call's usage — no extra model work.",
+      "（本次未记录摘要）": "(no summary recorded for this run)",
+      "读取压缩记录中…": "Loading compaction records…",
+      "还没有压缩记录": "No compactions yet",
+      "达到触发点或手动 /compact 后，这里会列出每次压缩的时间、用时与摘要。": "After a trigger point or a manual /compact, this lists every compaction with its time, duration and summary.",
+      "压缩事件": "Compaction events",
+      "自动": "Auto",
+      "自动（空闲时）": "Automatic (idle)",
+      "自动（任务中途）": "Automatic (mid-task)",
+      "自动（中途）": "Auto (mid-task)",
+      "手动 /compact": "Manual (/compact)",
+      "1 字": "1 word",
+      "{n} 字": "{n} words",
+      "1 条": "1 message",
+      "{n} 条": "{n} messages",
+      "1 字符": "1 character",
+      "{n} 字符": "{n} characters",
+      /* 压缩失败弹窗 */
+      "中途压缩失败": "Mid-task compaction failed",
+      "摘要生成失败": "Summary generation failed",
+      "中途压缩也失败了": "Mid-task compaction failed too",
+      "触发余量偏小，压缩请求放不下": "The trigger margin is too small — the compaction request did not fit.",
+      "上下文余量不足，历史未改动": "Not enough context headroom · history unchanged",
+      "已用上下文": "Context used",
+      "当前触发余量": "Current trigger margin",
+      "压缩请求可用余量": "Room available to the compaction request",
+      "思考 + 摘要 + 输出预留": "thinking + summary + output reserve",
+      "不再提示这类失败": "Don't show this failure again",
+      "可在「设置 → 会话压缩 → 压缩失败提示」重新开启": "You can turn it back on under Settings → Session Compaction → Failure alerts",
+      "开启「任务中途压缩」后，会在每一步开始前检查余量，余量不足就先压缩再继续，不会拖到最后一轮回答结束。": "With mid-task compaction on, every step starts with a headroom check: if space is short it compacts first, instead of waiting for the last answer.",
+      "只等任务结束再压缩，就可能出现「最后一轮几乎用尽窗口、写摘要反而没有余量」的情况；开启本项可把压缩提前到两步之间。": "Waiting only for the task to end can leave the last turn with almost no room — the summary request itself then fails. This option moves compaction earlier, between steps.",
+      "启用任务中途压缩": "Enable mid-task compaction",
+      "暂不调整": "Not now",
+      "稍后": "Later",
+      "缺：": "Missing: ",
+      /* 设置页预览里的示例内容 */
+      "读取大文件并提取校验串": "Reading a large file and extracting the check string",
+      "发消息或创建任务…": "Send a message or start a task…",
+      "请完整读取这个文件并总结…": "Please read this file in full and summarise it…",
+      "1/3 读取缓存": "1/3 Reading cache",
+      "2/3 写文档": "2/3 Writing summary",
+      "3/3 替换历史": "3/3 Replacing history",
+      "补全 2/3": "Continuing 2/3",
+      "写文档": "Writing summary",
+      "压缩中 · 2/3 · 00:42": "Compacting · 2/3 · 00:42",
+      "00:42 · 2/3 写文档": "00:42 · 2/3 Writing summary",
+      "00:42 · 消息会排队": "00:42 · messages queued",
+      "10,735 / 30,000 · 消息会排队": "10,735 / 30,000 · messages queued",
+      "20,000 最低": "20,000 min",
+      /* 带占位符的整句（同一句话只做一次翻译，语序由各语言自己决定） */
+      "上下文 {used} / {cap}": "Context {used} / {cap}",
+      "上下文 {used}": "Context {used}",
+      "第 {n} 次请求": "Request {n}",
+      "、": ", ",
+      "已压缩 1 条历史记录（约 {tokens} tokens）": "Compacted 1 history message (~{tokens} tokens)",
+      "已压缩 {n} 条历史记录（约 {tokens} tokens）": "Compacted {n} history messages (~{tokens} tokens)",
+      "正在重写摘要 · {time}": "Rewriting the summary · {time}",
+      "正在补全摘要 · {time}": "Completing the summary · {time}",
+      "{time} · 期间消息会排队": "{time} · messages queued",
+      "压缩中 · {step} · {time}": "Compacting · {step} · {time}",
+      "{time} · {step}": "{time} · {step}",
+      " · 消息会排队": " · messages queued",
+      "「任务中途压缩」已经开启，但触发余量只有 {trigger}，而这次压缩请求实际需要约 {needed}（含思考、摘要输出与工具定义），仍然没放下。": "Mid-task compaction is on, but its trigger margin is only {trigger} while this compaction request needed about {needed} — thinking, summary output and tool definitions included — so it still did not fit.",
+      "这一轮结束时上下文已用到 {used} / {window} tokens，只剩 {remaining}。写摘要本身还要思考并生成内容（约需 {needed}），请求放不下，所以这次压缩没有执行，历史保持原样。": "The turn ended with {used} / {window} tokens used and only {remaining} left. Writing the summary needs room to think and to generate (about {needed}), so the request did not fit and nothing was compacted; your history is unchanged.",
+      "已用 {used} / {window}": "Used {used} / {window}",
+      "余量 {remaining}": "Headroom {remaining}",
+      "把触发余量提高到 {tokens}，下次会在余量还够的时候先压缩，再继续当前任务。": "Raise the trigger margin to {tokens}: the next run compacts while there is still room, then continues the task.",
+      "把触发余量提高到 {tokens}": "Raise the trigger margin to {tokens}",
+      "建议值按当前模型窗口 {window} 计算，上限为窗口一半；调整后下一次判断即生效。": "The suggestion is computed from the current model window ({window}) and capped at half of it; it applies at the next check.",
+      "默认触发余量 {tokens} tokens，可在设置里调整；立即生效，无需重启，也不会改写你的配置文件。": "The default trigger margin is {tokens} tokens and you can change it in settings. It applies immediately, with no restart and no edits to your config files.",
+      "1 词": "1 word",
+      "{n} 词": "{n} words",
+      " · 触发时占窗口 {pct}%": " · {pct}% of window at trigger",
+      "触发时占窗口 {pct}%": "{pct}% of window at trigger",
+      "查看详情": "View details",
+      "1 条 / {tokens} tokens": "1 message / {tokens} tokens",
+      "{n} 条 / {tokens} tokens": "{n} messages / {tokens} tokens",
+      "第 {n} 次压缩": "Compaction #{n}",
+      "触发点阈值 {tokens}": "Trigger threshold {tokens}",
+      "压缩后 {tokens}": "After compaction {tokens}",
+      "示例窗口 {tokens} tokens": "Example window {tokens} tokens",
+      "触发线 · 已用 {tokens}": "Trigger line · used {tokens}",
+      "已用 {tokens}": "Used {tokens}",
+      "逐字保留尾部 ≈ {tokens}": "Verbatim tail ≈ {tokens}",
+      "触发余量 {tokens}": "Trigger margin {tokens}",
+      "窗口 {tokens}": "Window {tokens}",
+      "{tokens} 窗口一半": "{tokens} · half the window",
+      "示例：窗口 250K、主回复预留 20K、安全余量 10K → 可用预算 {budget}；{ratio}% ≈ {tokens} tokens": "Example: 250K window, 20K reserved for the reply, 10K headroom → {budget} usable; {ratio}% ≈ {tokens} tokens",
+      "（距输入上限余 {tokens}）": " ({tokens} below the input limit)",
+      "留空 = 恢复默认 {tokens} tokens。": "Empty = restore the default {tokens} tokens.",
+      "下一次压缩生效：单次摘要上限 {tokens} tokens。": "Next compaction will use a {tokens} token cap per summary.",
+      "单次摘要生成的输出上限，默认 {tokens} tokens；最低 8,192，留空恢复默认。写到上限后会自动续写或重写，各自独立预算。": "Output cap for a single summary call. Default {tokens} tokens, minimum 8,192; leave empty to restore the default. Hitting the cap triggers a continuation or a rewrite, each with its own budget.",
+      /*EN3*/
+    };
+
+    var UI_LOCALE = { value: "zh", listeners: [] };
+    function normalizeUiLocale(value) {
+      var text = typeof value === "string" ? value.trim().toLowerCase() : "";
+      return text.indexOf("en") === 0 ? "en" : "zh";
+    }
+    function uiLocale() { return UI_LOCALE.value; }
+    function isEnglish() { return UI_LOCALE.value === "en"; }
+    function publishLocale(value) {
+      var next = normalizeUiLocale(value);
+      if (next === UI_LOCALE.value) return next;
+      UI_LOCALE.value = next;
+      try { if (typeof document !== "undefined") document.documentElement.lang = next === "en" ? "en" : "zh-CN"; } catch (error) { /* tests have no documentElement */ }
+      for (var i = 0; i < UI_LOCALE.listeners.length; i += 1) {
+        try { UI_LOCALE.listeners[i](next); } catch (error) { /* a bad subscriber must not break the page */ }
+      }
+      return next;
+    }
+    function subscribeLocale(listener) {
+      UI_LOCALE.listeners.push(listener);
+      return function unsubscribe() {
+        var index = UI_LOCALE.listeners.indexOf(listener);
+        if (index >= 0) UI_LOCALE.listeners.splice(index, 1);
+      };
+    }
+    /* Re-render hook: the host rebuilds slots tagged with `locale: NS`, but a
+     * component already on screen must repaint on its own language change too. */
+    function useLocaleRevision() {
+      var state = React.useState(0);
+      var setRevision = state[1];
+      React.useEffect(function () {
+        return subscribeLocale(function () { setRevision(function (n) { return n + 1; }); });
+      }, []);
+      return state[0];
+    }
+    function t(key, params) {
+      var text = isEnglish() && Object.prototype.hasOwnProperty.call(EN, key) ? EN[key] : key;
+      if (params === undefined) return text;
+      return String(text).replace(/\{(\w+)\}/g, function (match, token) {
+        return Object.prototype.hasOwnProperty.call(params, token) ? String(params[token]) : match;
+      });
+    }
+    /* English needs "1 word" and "1 message"; the two keys carry that. */
+    function tn(count, oneKey, manyKey, params) {
+      var values = params || {};
+      return t(count === 1 ? oneKey : manyKey, values);
+    }
+    /* The host wants both built-in locales complete; the Chinese side is the
+     * identity mapping of the same key set (source string == translation). */
+    function mirrorDictionary() {
+      var out = {};
+      for (var key in EN) {
+        if (Object.prototype.hasOwnProperty.call(EN, key)) out[key] = key;
+      }
+      return out;
+    }
 
     /* 全部取自宿主在 body 上投射的 --dsw-alias-* 令牌，深浅色由宿主切换
      * body[data-ds-dark-theme]，插件不判断主题；兜底值只在宿主未提供时生效。
@@ -55,8 +329,11 @@ window.__ModuleLoader__.load({
       }
     }
     function presetLabel(id) {
-      return presetLabels[String(id)] || String(id || "未命名预设");
+      return presetLabels[String(id)] || String(id || t("未命名预设"));
     }
+    /* These tables are module-level constants, so they hold the msgid (the
+     * Chinese source string) and every render site calls t(). Calling t() here
+     * would freeze the label to whatever language was active at load time. */
     var DISPLAY_OPTIONS = [
       { id: "orbit", label: "轨道环" },
       { id: "strip", label: "状态条" },
@@ -190,18 +467,18 @@ window.__ModuleLoader__.load({
     function docZoomControls(connection) {
       return h("span", { className: "dsh-tl-zoom" },
         h("button", {
-          type: "button", className: "dsh-tl-zbtn", title: "缩小摘要字号", "aria-label": "缩小摘要字号",
+          type: "button", className: "dsh-tl-zbtn", title: t("缩小摘要字号"), "aria-label": t("缩小摘要字号"),
           onClick: function () { adjustDocFontSize(connection, -1); },
         }, "−"),
         h("button", {
-          type: "button", className: "dsh-tl-zbtn", title: "放大摘要字号", "aria-label": "放大摘要字号",
+          type: "button", className: "dsh-tl-zbtn", title: t("放大摘要字号"), "aria-label": t("放大摘要字号"),
           onClick: function () { adjustDocFontSize(connection, 1); },
         }, "+")
       );
     }
     function docTitle(connection, active) {
       return h("div", { className: "dsh-tl-doctitle" },
-        h("b", null, "摘要全文"),
+        h("b", null, t("摘要全文")),
         h("span", { className: "dsh-tl-docmeta" }, h("span", null, wordText(active)), docZoomControls(connection))
       );
     }
@@ -295,10 +572,10 @@ window.__ModuleLoader__.load({
     }
 
     function statusStep(status) {
-      if (status && status.retrying) return "补全 2/3";
-      if (status && status.step === "prepare") return "1/3 读取缓存";
-      if (status && status.step === "commit") return "3/3 替换历史";
-      return "2/3 写文档";
+      if (status && status.retrying) return t("补全 2/3");
+      if (status && status.step === "prepare") return t("1/3 读取缓存");
+      if (status && status.step === "commit") return t("3/3 替换历史");
+      return t("2/3 写文档");
     }
 
     function fetchStatus(connection, sessionId) {
@@ -336,6 +613,7 @@ window.__ModuleLoader__.load({
     }
 
     function StatusDock(props) {
+      useLocaleRevision();
       ensureStatusStyles();
       var connection = props.connection;
       var sessionId = props.sessionId;
@@ -415,34 +693,39 @@ window.__ModuleLoader__.load({
       var progress = statusProgress(status);
       if (view === "running") {
         title = status.retrying
-          ? (status.writing ? "正在从头重写摘要" : "正在补全摘要")
-          : "正在压缩历史会话";
+          ? (status.writing ? t("正在从头重写摘要") : t("正在补全摘要"))
+          : t("正在压缩历史会话");
         var pieces = [];
         if (Number(status.totalTokens) > 0) {
-          pieces.push("上下文 " + fmt(Number(status.totalTokens)) + (Number(status.thresholdTokens) > 0 ? " / " + fmt(Number(status.thresholdTokens)) : ""));
+          var used = fmt(Number(status.totalTokens));
+          pieces.push(Number(status.thresholdTokens) > 0
+            ? t("上下文 {used} / {cap}", { used: used, cap: fmt(Number(status.thresholdTokens)) })
+            : t("上下文 {used}", { used: used }));
         }
-        pieces.push(status.retrying ? "第 " + String(status.summaryAttempt || 2) + " 次请求" : "期间发送的消息会排队");
+        pieces.push(status.retrying
+          ? t("第 {n} 次请求", { n: String(status.summaryAttempt || 2) })
+          : t("期间发送的消息会排队"));
         if (Array.isArray(status.missingSections) && status.missingSections.length > 0) {
-          pieces.push("缺：" + status.missingSections.join("、"));
+          pieces.push(t("缺：") + status.missingSections.join(t("、")));
         }
         sub = pieces.join(" · ");
       } else if (view === "done") {
         var nodes = Number(status.shadowedNodes) || 0;
         var tokens = Number(status.shadowedTokens) || 0;
         title = nodes > 0
-          ? "已压缩 " + fmt(nodes) + " 条历史记录（约 " + fmt(tokens) + " tokens）"
-          : (status.note === "no compactable range" ? "没有需要压缩的历史" : "压缩完成");
-        sub = "旧消息仍可用回滚功能恢复";
+          ? tn(nodes, "已压缩 1 条历史记录（约 {tokens} tokens）", "已压缩 {n} 条历史记录（约 {tokens} tokens）", { n: fmt(nodes), tokens: fmt(tokens) })
+          : (status.note === "no compactable range" ? t("没有需要压缩的历史") : t("压缩完成"));
+        sub = t("旧消息仍可用回滚功能恢复");
       } else {
-        title = staleRunning ? "压缩可能已中断（超时）· 历史未改动" : "摘要生成失败 · 历史未改动";
+        title = staleRunning ? t("压缩可能已中断（超时）· 历史未改动") : t("摘要生成失败 · 历史未改动");
         if (staleRunning) {
-          sub = "下一次空闲会重新尝试";
+          sub = t("下一次空闲会重新尝试");
         } else if (String(status.errorCode || "") === "INCOMPLETE_SUMMARY") {
-          sub = "摘要不完整，已放弃提交 · 下次空闲重试";
+          sub = t("摘要不完整，已放弃提交 · 下次空闲重试");
         } else if (String(status.error || "").toLowerCase().indexOf("cancel") >= 0) {
-          sub = "压缩已取消 · 下次空闲重试";
+          sub = t("压缩已取消 · 下次空闲重试");
         } else {
-          sub = status.error ? String(status.error).slice(0, 140) : "下次空闲重试";
+          sub = status.error ? String(status.error).slice(0, 140) : t("下次空闲重试");
         }
       }
 
@@ -486,9 +769,12 @@ window.__ModuleLoader__.load({
       if (view === "running" && themeStyle !== "strip") {
         var stepNumber = status.step === "prepare" ? 1 : status.step === "commit" ? 3 : 2;
         var ringPct = stepNumber === 1 ? 33 : stepNumber === 3 ? 92 : 66;
+        var elapsed = clockText(startedAt);
         var cardSub = status.retrying
-          ? (status.writing ? "正在重写摘要 · " : "正在补全摘要 · ") + clockText(startedAt)
-          : clockText(startedAt) + " · 期间消息会排队";
+          ? (status.writing
+            ? t("正在重写摘要 · {time}", { time: elapsed })
+            : t("正在补全摘要 · {time}", { time: elapsed }))
+          : t("{time} · 期间消息会排队", { time: elapsed });
         if (themeStyle === "topbar") {
           var topLine = h("div", { style: {
             position: "fixed",
@@ -516,7 +802,7 @@ window.__ModuleLoader__.load({
               background: STATUS_SURFACE, color: STATUS_TEXT, fontSize: 11, whiteSpace: "nowrap",
             } },
               h("span", { className: "dsh-handoff-pulse", style: { width: 7, height: 7, borderRadius: "50%", background: STATUS_ACCENT } }),
-              "压缩中 · " + statusStep(status) + " · " + clockText(startedAt)
+              t("压缩中 · {step} · {time}", { step: statusStep(status), time: clockText(startedAt) })
             )
           );
           return ReactDOM.createPortal(h(React.Fragment, null, topLine, pill), document.body);
@@ -528,7 +814,7 @@ window.__ModuleLoader__.load({
               role: "status",
               "aria-live": "polite",
               "data-dsh-handoff-status": "running",
-              title: "压缩期间发送的消息会排队",
+              title: t("压缩期间发送的消息会排队"),
               style: {
                 position: "fixed",
                 left: place.left,
@@ -552,7 +838,7 @@ window.__ModuleLoader__.load({
               h("div", { style: { minWidth: 0, flex: 1 } },
                 h("div", { style: { fontSize: 12, fontWeight: 600, color: STATUS_TEXT, lineHeight: "17px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
                 h("div", { style: { marginTop: 2, fontSize: 10.5, color: STATUS_MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } },
-                  clockText(startedAt) + " · " + statusStep(status) + (place.width >= 216 ? " · 消息会排队" : ""))
+                  t("{time} · {step}", { time: clockText(startedAt), step: statusStep(status) }) + (place.width >= 216 ? t(" · 消息会排队") : ""))
               )
             ),
             document.body
@@ -573,7 +859,7 @@ window.__ModuleLoader__.load({
               color: STATUS_TEXT, fontVariantNumeric: "tabular-nums",
             } },
               stepNumber + "/3",
-              h("span", { style: { fontSize: 9, color: STATUS_MUTED, fontFamily: "inherit", fontWeight: 400 } }, "写文档")
+              h("span", { style: { fontSize: 9, color: STATUS_MUTED, fontFamily: "inherit", fontWeight: 400 } }, t("写文档"))
             )
           )
           : h("div", { className: "dsh-handoff-orbit" }, h("div", { className: "dsh-handoff-orbit-core" }));
@@ -614,7 +900,7 @@ window.__ModuleLoader__.load({
               indicator,
               h("div", { style: { fontSize: 12.5, fontWeight: 600, color: STATUS_TEXT } }, title),
               h("div", { style: { fontSize: 11, color: STATUS_MUTED } }, cardSub),
-              h("div", { style: { fontSize: 10.5, color: STATUS_MUTED, opacity: 0.85 } }, "完成后把最旧的这段历史收成一条摘要")
+              h("div", { style: { fontSize: 10.5, color: STATUS_MUTED, opacity: 0.85 } }, t("完成后把最旧的这段历史收成一条摘要"))
             )
           ),
           document.body
@@ -665,10 +951,10 @@ window.__ModuleLoader__.load({
             ? h("span", { "aria-live": "off", style: { fontSize: 11, color: STATUS_MUTED, fontVariantNumeric: "tabular-nums", flex: "0 0 auto" } }, clockText(startedAt))
             : null,
           view === "running" && typeof cancel === "function"
-            ? h("button", { type: "button", onClick: handleCancel, style: ghost, title: "取消压缩（历史保持原样，排队的消息会保留）" }, "取消")
+            ? h("button", { type: "button", onClick: handleCancel, style: ghost, title: t("取消压缩（历史保持原样，排队的消息会保留）") }, t("取消"))
             : null,
           view !== "running"
-            ? h("button", { type: "button", onClick: handleDismiss, style: close, "aria-label": "关闭状态提示", title: "关闭" }, "×")
+            ? h("button", { type: "button", onClick: handleDismiss, style: close, "aria-label": t("关闭状态提示"), title: t("关闭") }, "×")
             : null
         ),
         view === "running"
@@ -700,6 +986,7 @@ window.__ModuleLoader__.load({
      * checkbox maps to the 压缩失败提示 switch in the settings page.
      */
     function FailureHint(props) {
+      useLocaleRevision();
       ensureStatusStyles();
       var connection = props.connection;
       var sessionId = props.sessionId;
@@ -799,7 +1086,7 @@ window.__ModuleLoader__.load({
         h("div", {
           role: "dialog",
           "aria-modal": "true",
-          "aria-label": raising ? "中途压缩失败" : "摘要生成失败",
+          "aria-label": raising ? t("中途压缩失败") : t("摘要生成失败"),
           "data-dsh-handoff-hint": hint.kind || "enable-midtask",
           style: {
             position: "fixed", inset: 0,
@@ -820,30 +1107,23 @@ window.__ModuleLoader__.load({
                 },
               }, "!"),
               h("div", { style: { flex: "1 1 auto", minWidth: 0 } },
-                h("h3", { style: titleStyle }, raising ? "中途压缩也失败了" : "摘要生成失败"),
-                h("div", { style: subStyleDialog }, raising ? "触发余量偏小，压缩请求放不下" : "上下文余量不足，历史未改动")
+                h("h3", { style: titleStyle }, raising ? t("中途压缩也失败了") : t("摘要生成失败")),
+                h("div", { style: subStyleDialog }, raising ? t("触发余量偏小，压缩请求放不下") : t("上下文余量不足，历史未改动"))
               ),
               h("button", {
-                type: "button", onClick: close, "aria-label": "关闭",
+                type: "button", onClick: close, "aria-label": t("关闭"),
                 style: { border: 0, background: "transparent", color: STATUS_FAINT, fontSize: 17, lineHeight: "20px", width: 22, height: 22, padding: 0, cursor: "pointer" },
               }, "×")
             ),
 
             h("div", { style: { marginTop: 13 } },
               raising
-                ? h("p", { style: para },
-                  "「任务中途压缩」已经开启，但触发余量只有 ", h("span", { style: strong }, fmt(trigger)),
-                  "，而这次压缩请求实际需要约 ", h("span", { style: strong }, fmt(needed)),
-                  "（含思考、摘要输出与工具定义），仍然没放下。")
-                : h("p", { style: para },
-                  "这一轮结束时上下文已用到 ", h("span", { style: strong }, fmt(used) + " / " + fmt(windowTokens)),
-                  " tokens，只剩 ", h("span", { style: strong }, fmt(remaining)),
-                  "。写摘要本身还要思考并生成内容（约需 ", h("span", { style: strong }, fmt(needed)),
-                  "），请求放不下，所以这次压缩没有执行，历史保持原样。"),
+                ? h("p", { style: para }, t("「任务中途压缩」已经开启，但触发余量只有 {trigger}，而这次压缩请求实际需要约 {needed}（含思考、摘要输出与工具定义），仍然没放下。", { trigger: fmt(trigger), needed: fmt(needed) }))
+                : h("p", { style: para }, t("这一轮结束时上下文已用到 {used} / {window} tokens，只剩 {remaining}。写摘要本身还要思考并生成内容（约需 {needed}），请求放不下，所以这次压缩没有执行，历史保持原样。", { used: fmt(used), window: fmt(windowTokens), remaining: fmt(remaining), needed: fmt(needed) })),
 
               h("div", { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", fontSize: 11, color: STATUS_MUTED, margin: "10px 0 6px" } },
-                h("span", null, "已用 " + fmt(used) + " / " + fmt(windowTokens)),
-                h("span", { style: { color: raising ? STATUS_WARN : STATUS_ERROR, fontWeight: 600 } }, "余量 " + fmt(remaining))
+                h("span", null, t("已用 {used} / {window}", { used: fmt(used), window: fmt(windowTokens) })),
+                h("span", { style: { color: raising ? STATUS_WARN : STATUS_ERROR, fontWeight: 600 } }, t("余量 {remaining}", { remaining: fmt(remaining) }))
               ),
               h("div", { style: { position: "relative", display: "flex", height: 22, border: "1px solid " + STATUS_BORDER, borderRadius: 6, overflow: "hidden", background: "rgba(127,133,140,.12)" } },
                 h("div", { style: { width: usedPct.toFixed(2) + "%", background: "linear-gradient(90deg, rgba(76,141,255,.18), rgba(76,141,255,.40))" } }),
@@ -852,23 +1132,23 @@ window.__ModuleLoader__.load({
 
               h("div", { style: { marginTop: 12, border: "1px solid " + STATUS_BORDER, borderRadius: 10, overflow: "hidden" } },
                 h("div", { style: cause },
-                  h("span", null, "已用上下文"),
+                  h("span", null, t("已用上下文")),
                   h("span", { style: causeValue }, fmt(used) + " / " + fmt(windowTokens))
                 ),
                 h("div", { style: Object.assign({}, cause, { borderTop: "1px solid " + STATUS_BORDER }) },
-                  h("span", null, raising ? "当前触发余量" : "压缩请求可用余量"),
+                  h("span", null, raising ? t("当前触发余量") : t("压缩请求可用余量")),
                   h("span", { style: Object.assign({}, causeValue, { color: STATUS_ERROR }) }, fmt(raising ? trigger : remaining))
                 ),
                 h("div", { style: Object.assign({}, cause, { borderTop: "1px solid " + STATUS_BORDER }) },
-                  h("span", null, "思考 + 摘要 + 输出预留"),
+                  h("span", null, t("思考 + 摘要 + 输出预留")),
                   h("span", { style: causeValue }, "≈ " + fmt(needed))
                 )
               ),
 
               h("p", { style: Object.assign({}, para, { marginTop: 11 }) },
                 raising
-                  ? h("span", null, "把触发余量提高到 ", h("span", { style: strong }, fmt(suggest)), "，下次会在余量还够的时候先压缩，再继续当前任务。")
-                  : h("span", null, "开启「任务中途压缩」后，会在每一步开始前检查余量，余量不足就先压缩再继续，不会拖到最后一轮回答结束。")
+                  ? h("span", null, t("把触发余量提高到 {tokens}，下次会在余量还够的时候先压缩，再继续当前任务。", { tokens: fmt(suggest) }))
+                  : h("span", null, t("开启「任务中途压缩」后，会在每一步开始前检查余量，余量不足就先压缩再继续，不会拖到最后一轮回答结束。"))
               )
             ),
 
@@ -884,8 +1164,8 @@ window.__ModuleLoader__.load({
                 style: { width: 14, height: 14, margin: "2px 0 0", flex: "0 0 auto", accentColor: STATUS_ACCENT },
               }),
               h("span", { style: { fontSize: 11.5, color: STATUS_MUTED, lineHeight: 1.55 } },
-                "不再提示这类失败",
-                h("span", { style: { display: "block", fontSize: 10.5, color: STATUS_FAINT, marginTop: 1 } }, "可在「设置 → 会话压缩 → 压缩失败提示」重新开启")
+                t("不再提示这类失败"),
+                h("span", { style: { display: "block", fontSize: 10.5, color: STATUS_FAINT, marginTop: 1 } }, t("可在「设置 → 会话压缩 → 压缩失败提示」重新开启"))
               )
             ),
 
@@ -897,18 +1177,18 @@ window.__ModuleLoader__.load({
                   fontSize: 12, fontWeight: 600, padding: "7px 12px", borderRadius: 8,
                   cursor: busy ? "default" : "pointer", opacity: busy ? 0.7 : 1, whiteSpace: "nowrap",
                 },
-              }, raising ? "把触发余量提高到 " + fmt(suggest) : "启用任务中途压缩"),
+              }, raising ? t("把触发余量提高到 {tokens}", { tokens: fmt(suggest) }) : t("启用任务中途压缩")),
               h("span", { style: { flex: "1 1 auto" } }),
               h("button", {
                 type: "button", onClick: close, disabled: busy,
                 style: { border: "1px solid transparent", background: "transparent", color: STATUS_FAINT, fontSize: 12, padding: "7px 10px", borderRadius: 8, cursor: "pointer", whiteSpace: "nowrap" },
-              }, raising ? "暂不调整" : "稍后")
+              }, raising ? t("暂不调整") : t("稍后"))
             ),
 
             h("div", { style: { marginTop: 10, fontSize: 10.5, color: STATUS_FAINT, lineHeight: 1.65 } },
               raising
-                ? "建议值按当前模型窗口 " + fmt(windowTokens) + " 计算，上限为窗口一半；调整后下一次判断即生效。"
-                : "默认触发余量 " + fmt(MID_TASK_MIN_TRIGGER) + " tokens，可在设置里调整；立即生效，无需重启，也不会改写你的配置文件。"
+                ? t("建议值按当前模型窗口 {window} 计算，上限为窗口一半；调整后下一次判断即生效。", { window: fmt(windowTokens) })
+                : t("默认触发余量 {tokens} tokens，可在设置里调整；立即生效，无需重启，也不会改写你的配置文件。", { tokens: fmt(MID_TASK_MIN_TRIGGER) })
             )
           )
         ),
@@ -919,7 +1199,7 @@ window.__ModuleLoader__.load({
     function ThemePreview(props) {
       var style = normalizeDisplayStyle(props.theme);
       var chatChildren = [
-        h("div", { key: "user", style: { marginLeft: "auto", maxWidth: "62%", border: "1px solid " + C.accentLine, background: C.accentSoft, borderRadius: "7px 7px 2px 7px", padding: "4px 6px", fontSize: 9, color: C.text } }, "请完整读取这个文件并总结…"),
+        h("div", { key: "user", style: { marginLeft: "auto", maxWidth: "62%", border: "1px solid " + C.accentLine, background: C.accentSoft, borderRadius: "7px 7px 2px 7px", padding: "4px 6px", fontSize: 9, color: C.text } }, t("请完整读取这个文件并总结…")),
         h("div", { key: "lines", style: { display: "flex", flexDirection: "column", gap: 4, marginTop: 6 } },
           h("i", { key: "l1", style: { height: 4, borderRadius: 99, background: C.line } }),
           h("i", { key: "l2", style: { height: 4, borderRadius: 99, background: C.line, width: "88%" } }),
@@ -934,8 +1214,8 @@ window.__ModuleLoader__.load({
               h("div", { style: { width: 28, height: 28, borderRadius: "50%", background: "conic-gradient(" + C.accent + " 0 66%, " + C.line + " 66% 100%)", WebkitMask: "radial-gradient(circle, transparent 52%, #000 55%)", mask: "radial-gradient(circle, transparent 52%, #000 55%)" } }),
               h("div", { style: { position: "absolute", inset: 0, display: "grid", placeItems: "center", fontSize: 7.5, fontFamily: "ui-monospace,Consolas,monospace" } }, "2/3")
             ),
-            h("div", { style: { fontSize: 8.5, fontWeight: 500 } }, "正在压缩历史会话"),
-            h("div", { style: { fontSize: 7.5, color: C.muted } }, "00:42 · 消息会排队")
+            h("div", { style: { fontSize: 8.5, fontWeight: 500 } }, t("正在压缩历史会话")),
+            h("div", { style: { fontSize: 7.5, color: C.muted } }, t("00:42 · 消息会排队"))
           )
         );
       } else if (style === "orbit") {
@@ -944,8 +1224,8 @@ window.__ModuleLoader__.load({
             h("div", { className: "dsh-handoff-mini-orbit" },
               h("span", { style: { position: "absolute", left: "50%", top: "50%", width: 4, height: 4, margin: "-2px 0 0 -2px", borderRadius: "50%", background: C.accent } })
             ),
-            h("div", { style: { fontSize: 8.5, fontWeight: 500 } }, "正在压缩历史会话…"),
-            h("div", { style: { fontSize: 7.5, color: C.muted } }, "00:42 · 消息会排队")
+            h("div", { style: { fontSize: 8.5, fontWeight: 500 } }, t("正在压缩历史会话…")),
+            h("div", { style: { fontSize: 7.5, color: C.muted } }, t("00:42 · 消息会排队"))
           )
         );
       } else if (style === "topbar") {
@@ -954,7 +1234,7 @@ window.__ModuleLoader__.load({
           h("div", { key: "pillrow", style: { display: "flex", justifyContent: "center", paddingTop: 5 } },
             h("span", { style: { display: "inline-flex", alignItems: "center", gap: 4, height: 16, padding: "0 6px", borderRadius: 999, border: "1px solid " + C.accentLine, background: C.card, fontSize: 8 } },
               h("span", { className: "dsh-handoff-pulse", style: { width: 4, height: 4, borderRadius: "50%", background: C.accent } }),
-              "压缩中 · 2/3 · 00:42"
+              t("压缩中 · 2/3 · 00:42")
             )
           )
         );
@@ -962,8 +1242,8 @@ window.__ModuleLoader__.load({
         overlay = h("div", { style: { position: "absolute", right: 8, top: 9, boxSizing: "border-box", width: 104, display: "flex", alignItems: "flex-start", gap: 4, padding: "4px 5px", borderRadius: 5, background: C.card, border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent } },
           h("span", { className: "dsh-handoff-pulse", style: { width: 4, height: 4, borderRadius: "50%", background: C.accent, marginTop: 4, flex: "0 0 auto" } }),
           h("div", { style: { minWidth: 0 } },
-            h("div", { style: { fontSize: 7, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "正在压缩历史会话"),
-            h("div", { style: { fontSize: 6.5, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "00:42 · 2/3 写文档")
+            h("div", { style: { fontSize: 7, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, t("正在压缩历史会话")),
+            h("div", { style: { fontSize: 6.5, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, t("00:42 · 2/3 写文档"))
           )
         );
       }
@@ -971,10 +1251,10 @@ window.__ModuleLoader__.load({
         ? h("div", { style: { margin: "0 8px 4px", border: "1px solid " + C.line, borderLeft: "2px solid " + C.accent, borderRadius: 5, background: C.card, padding: "4px 6px" } },
           h("div", { style: { display: "flex", alignItems: "center", gap: 5 } },
             h("span", { className: "dsh-handoff-pulse", style: { width: 5, height: 5, borderRadius: "50%", background: C.accent } }),
-            h("span", { style: { fontSize: 9, fontWeight: 500 } }, "正在压缩历史会话"),
+            h("span", { style: { fontSize: 9, fontWeight: 500 } }, t("正在压缩历史会话")),
             h("span", { style: { marginLeft: "auto", fontSize: 8, color: C.accent } }, "2/3")
           ),
-          h("div", { style: { fontSize: 8, color: C.muted, marginTop: 1 } }, "10,735 / 30,000 · 消息会排队"),
+          h("div", { style: { fontSize: 8, color: C.muted, marginTop: 1 } }, t("10,735 / 30,000 · 消息会排队")),
           h("div", { style: { height: 2, borderRadius: 99, background: C.line, marginTop: 3, overflow: "hidden" } },
             h("div", { style: { width: "64%", height: "100%", background: C.accent, borderRadius: 99 } })
           )
@@ -984,8 +1264,8 @@ window.__ModuleLoader__.load({
         h("div", { style: { height: 128, display: "flex", flexDirection: "column" } },
           h("div", { style: { height: 24, flex: "0 0 24px", display: "flex", alignItems: "center", gap: 6, padding: "0 8px", borderBottom: "1px solid " + C.line, background: C.panel } },
             h("span", { style: { width: 5, height: 5, borderRadius: "50%", background: C.ok } }),
-            h("span", { style: { fontSize: 9.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, "读取大文件并提取校验串"),
-            h("span", { style: { marginLeft: "auto", fontSize: 8.5, color: C.muted, border: "1px solid " + C.line, borderRadius: 999, padding: "0 6px" } }, "轻量本地")
+            h("span", { style: { fontSize: 9.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, t("读取大文件并提取校验串")),
+            h("span", { style: { marginLeft: "auto", fontSize: 8.5, color: C.muted, border: "1px solid " + C.line, borderRadius: 999, padding: "0 6px" } }, t("轻量本地"))
           ),
           h("div", { style: { flex: 1, minHeight: 0, padding: (style === "topbar" ? 22 : 7) + "px 8px 7px", position: "relative", overflow: "hidden" } },
             (style === "topbar" || style === "corner") ? overlay : null,
@@ -994,7 +1274,7 @@ window.__ModuleLoader__.load({
           ),
           strip,
           h("div", { style: { flex: "0 0 26px", display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderTop: "1px solid " + C.line, background: C.panel } },
-            h("div", { style: { flex: 1, height: 18, border: "1px solid " + C.line, borderRadius: 5, background: C.canvas, color: C.faint, fontSize: 8, display: "flex", alignItems: "center", padding: "0 6px", whiteSpace: "nowrap", overflow: "hidden" } }, "发消息或创建任务…"),
+            h("div", { style: { flex: 1, height: 18, border: "1px solid " + C.line, borderRadius: 5, background: C.canvas, color: C.faint, fontSize: 8, display: "flex", alignItems: "center", padding: "0 6px", whiteSpace: "nowrap", overflow: "hidden" } }, t("发消息或创建任务…")),
             h("span", { style: { width: 16, height: 16, borderRadius: "50%", background: C.accent, flex: "0 0 auto" } })
           )
         )
@@ -1038,8 +1318,8 @@ window.__ModuleLoader__.load({
           h(TimelineChain, { events: timelinePreviewEvents(), style: props.style, regionH: 100, demoHover: true })
         ),
         h("div", { style: { paddingTop: 10, paddingLeft: 2 } },
-          h("div", { style: { fontSize: 12.5, fontWeight: 600, color: C.text } }, option.label + (option.id === "ember" ? " · 推荐" : "")),
-          h("div", { style: { fontSize: 11.5, color: C.muted, marginTop: 3, lineHeight: 1.7 } }, option.desc)
+          h("div", { style: { fontSize: 12.5, fontWeight: 600, color: C.text } }, t(option.label) + (option.id === "ember" ? t(" · 推荐") : "")),
+          h("div", { style: { fontSize: 11.5, color: C.muted, marginTop: 3, lineHeight: 1.7 } }, t(option.desc))
         )
       );
     }
@@ -1242,9 +1522,13 @@ window.__ModuleLoader__.load({
     }
 
     function two(n) { return String(n).padStart(2, "0"); }
+    /** Chinese keeps 24-hour time; English follows the 12-hour habit. */
     function clockOf(ts) {
       var d = new Date(Number(ts) || 0);
-      return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds());
+      if (!isEnglish()) return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds());
+      var hours = d.getHours();
+      var suffix = hours < 12 ? "AM" : "PM";
+      return (hours % 12 === 0 ? 12 : hours % 12) + ":" + two(d.getMinutes()) + " " + suffix;
     }
     function dateOf(ts) {
       var d = new Date(Number(ts) || 0);
@@ -1255,7 +1539,9 @@ window.__ModuleLoader__.load({
       if (!Number.isFinite(n) || n < 0) return "—";
       if (n < 60000) return (n / 1000).toFixed(1) + " s";
       var total = Math.round(n / 1000);
-      return Math.floor(total / 60) + " m " + two(total % 60) + " s";
+      return isEnglish()
+        ? Math.floor(total / 60) + " min " + two(total % 60) + " s"
+        : Math.floor(total / 60) + " m " + two(total % 60) + " s";
     }
     /** Compact duration for the denser capsule/ring/bars rows ("1m01s"). */
     function durationShort(ms) {
@@ -1265,31 +1551,43 @@ window.__ModuleLoader__.load({
       var total = Math.round(n / 1000);
       return Math.floor(total / 60) + "m" + String(total % 60).padStart(2, "0") + "s";
     }
-    /** Total words shown on the timeline: Chinese characters plus English words. */
+    /**
+     * The number the timeline scales and prints. Chinese counts ideographs plus
+     * Latin words (what a Chinese reader calls 字数); an English UI counts
+     * English words only, which is what "word count" means there.
+     */
     function wordCount(event) {
       var cjk = Number(event.cjk);
       var words = Number(event.words);
+      if (isEnglish()) return Number.isFinite(words) ? words : 0;
       if (Number.isFinite(cjk) || Number.isFinite(words)) {
         return (Number.isFinite(cjk) ? cjk : 0) + (Number.isFinite(words) ? words : 0);
       }
       return Number(event.summaryChars) || 0;
     }
+    /** "{n} 字" / "{n} words", singular for exactly one. */
+    function unitText(count) {
+      var value = fmt(count);
+      return tn(count, "1 字", "{n} 字", { n: value });
+    }
     function wordText(event) {
       var cjk = Number(event.cjk);
       var words = Number(event.words);
-      if (Number.isFinite(cjk) || Number.isFinite(words)) {
-        return fmt(Number.isFinite(cjk) ? cjk : 0) + " 字" + (Number.isFinite(words) && words > 0 ? " · " + fmt(words) + " 词" : "");
+      if (!isEnglish() && (Number.isFinite(cjk) || Number.isFinite(words))) {
+        return unitText(wordCount(event))
+          + (Number.isFinite(words) && words > 0 ? " · " + tn(words, "1 词", "{n} 词", { n: fmt(words) }) : "");
       }
-      return fmt(Number(event.summaryChars) || 0) + " 字符";
+      if (isEnglish()) return unitText(wordCount(event));
+      return tn(Number(event.summaryChars) || 0, "1 字符", "{n} 字符", { n: fmt(Number(event.summaryChars) || 0) });
     }
     /** History carries manual / midtask / auto; files written before 0.3.1 have no midtask. */
     function triggerLabel(trigger) {
-      if (trigger === "manual") return "手动 /compact";
-      return trigger === "midtask" ? "自动（任务中途）" : "自动（空闲时）";
+      if (trigger === "manual") return t("手动 /compact");
+      return trigger === "midtask" ? t("自动（任务中途）") : t("自动（空闲时）");
     }
     function triggerShort(trigger) {
-      if (trigger === "manual") return "手动 /compact";
-      return trigger === "midtask" ? "自动（中途）" : "自动";
+      if (trigger === "manual") return t("手动 /compact");
+      return trigger === "midtask" ? t("自动（中途）") : t("自动");
     }
 
     /**
@@ -1411,6 +1709,7 @@ window.__ModuleLoader__.load({
      * (with onOpen) and by the settings preview (static sample events).
      */
     function TimelineChain(props) {
+      useLocaleRevision();
       // The gutter dock injects this too, but the settings preview can be the
       // first surface to render a chain (e.g. before any session with history
       // is opened), so load it here as well.
@@ -1463,7 +1762,7 @@ window.__ModuleLoader__.load({
           kids = [
             h("span", { key: "n", className: "dsh-tl-node" }, h("i", { className: "dsh-tl-dot", style: { width: bead + "px", height: bead + "px" } })),
             dense ? null : h("span", { key: "t", className: "dsh-tl-tm" }, time),
-            labels ? h("span", { key: "m", className: "dsh-tl-meta" }, h("b", null, dur), " · " + fmt(chars) + " 字") : null,
+            labels ? h("span", { key: "m", className: "dsh-tl-meta" }, h("b", null, dur), " · " + unitText(chars)) : null,
           ];
         } else if (style === "capsule") {
           var capH = Math.min(24, eh + 6);
@@ -1474,7 +1773,7 @@ window.__ModuleLoader__.load({
             h("i", { key: "d", className: "dsh-tl-dot", style: { width: 6, height: 6 } }),
             beadOnly ? null : h("span", { key: "c", className: "dsh-tl-cap" },
               h("span", { className: "dsh-tl-tm" }, time),
-              labels ? h("span", { className: "dsh-tl-metrics" }, durationShort(event.durationMs) + " · " + fmt(chars) + " 字") : null
+              labels ? h("span", { className: "dsh-tl-metrics" }, durationShort(event.durationMs) + " · " + unitText(chars)) : null
             ),
           ];
         } else if (style === "ring") {
@@ -1485,7 +1784,7 @@ window.__ModuleLoader__.load({
           kids = [
             h("span", { key: "r", className: "dsh-tl-node" }, timelineRing(size, pct)),
             dense ? null : h("span", { key: "t", className: "dsh-tl-tm" }, time),
-            labels ? h("span", { key: "m", className: "dsh-tl-meta" }, h("b", null, durationShort(event.durationMs)), " · " + fmt(chars) + " 字") : null,
+            labels ? h("span", { key: "m", className: "dsh-tl-meta" }, h("b", null, durationShort(event.durationMs)), " · " + unitText(chars)) : null,
           ];
         } else if (style === "quiet") {
           kids = [
@@ -1493,7 +1792,7 @@ window.__ModuleLoader__.load({
             dense ? null : h("span", { key: "t", className: "dsh-tl-tm" }, time),
             h("span", { key: "h", className: "dsh-tl-hover" },
               h("b", null, time + " · " + dur),
-              h("span", null, fmt(chars) + " 字 · " + triggerShort(event.trigger))
+              h("span", null, unitText(chars) + " · " + triggerShort(event.trigger))
             ),
           ];
         } else {
@@ -1502,11 +1801,11 @@ window.__ModuleLoader__.load({
             labels ? h("span", { key: "t", className: "dsh-tl-tm" }, time) : null,
             h("span", {
               key: "b", className: "dsh-tl-track",
-              title: fmt(chars) + " 字" + (contextPct !== null ? " · 触发时占窗口 " + contextPct.toFixed(1) + "%" : ""),
+              title: unitText(chars) + (contextPct !== null ? t(" · 触发时占窗口 {pct}%", { pct: contextPct.toFixed(1) }) : ""),
             },
               contextPct === null ? null : h("i", { style: { width: Math.max(2, Math.min(100, contextPct)).toFixed(1) + "%" } })
             ),
-            labels ? h("span", { key: "v", className: "dsh-tl-num" }, fmt(chars) + " 字") : null,
+            labels ? h("span", { key: "v", className: "dsh-tl-num" }, unitText(chars)) : null,
           ];
         }
 
@@ -1514,7 +1813,9 @@ window.__ModuleLoader__.load({
           key: String(event.startedAt || i),
           type: "button",
           className: "dsh-tl-ev" + (on ? " on" : "") + (style === "quiet" && props.demoHover === true && on ? " demo" : ""),
-          title: time + " · " + dur + " · " + fmt(chars) + " 字" + (style === "bars" && contextPct !== null ? "（触发时占窗口 " + contextPct.toFixed(1) + "%）" : "") + " · 查看详情",
+          title: [time, dur, unitText(chars)]
+            .concat(style === "bars" && contextPct !== null ? [t("触发时占窗口 {pct}%", { pct: contextPct.toFixed(1) })] : [], [t("查看详情")])
+            .join(" · "),
           onClick: typeof props.onOpen === "function" ? function () { props.onOpen(i); } : undefined,
           style: rowStyle,
         }, kids));
@@ -1526,6 +1827,7 @@ window.__ModuleLoader__.load({
     }
 
     function TimelineDock(props) {
+      useLocaleRevision();
       ensureTimelineStyles();
       var connection = props.connection;
       var sessionId = props.sessionId;
@@ -1680,16 +1982,16 @@ window.__ModuleLoader__.load({
               transform: "rotate(-90 " + ringCenter + " " + ringCenter + ")",
             })
           ),
-          h("figcaption", null, pctValue === null ? "—" : pctValue.toFixed(1) + "%", h("small", null, "占窗口"))
+          h("figcaption", null, pctValue === null ? "—" : pctValue.toFixed(1) + "%", h("small", null, t("占窗口")))
         );
 
         var rows = [
-          ["压缩用时", durationText(active.durationMs)],
-          ["触发方式", triggerLabel(active.trigger)],
-          ["摘要", wordText(active)],
-          ["摘要输出", Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
-          ["替换历史", (fmt(Number(active.shadowedNodes) || 0) + " 条 / " + fmt(Number(active.shadowedTokens) || 0) + " tokens")],
-            ["模型", [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
+          [t("压缩用时"), durationText(active.durationMs)],
+          [t("触发方式"), triggerLabel(active.trigger)],
+          [t("摘要"), wordText(active)],
+          [t("摘要输出"), Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
+          [t("替换历史"), tn(Number(active.shadowedNodes) || 0, "1 条 / {tokens} tokens", "{n} 条 / {tokens} tokens", { n: fmt(Number(active.shadowedNodes) || 0), tokens: fmt(Number(active.shadowedTokens) || 0) })],
+            [t("模型"), [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
         ];
 
         modal = h("div", {
@@ -1697,11 +1999,11 @@ window.__ModuleLoader__.load({
           "data-dsh-handoff-timeline-modal": "1",
           onMouseDown: function (ev) { if (ev.target === ev.currentTarget) setOpenIndex(-1); },
         },
-          h("div", { className: "dsh-tl-modal", role: "dialog", "aria-modal": "true", "aria-label": "压缩详情" },
+          h("div", { className: "dsh-tl-modal", role: "dialog", "aria-modal": "true", "aria-label": t("压缩详情") },
             h("div", { className: "dsh-tl-mh" },
-              h("h3", null, "第 " + String(openIndex + 1) + " 次压缩"),
+              h("h3", null, t("第 {n} 次压缩", { n: String(openIndex + 1) })),
               h("small", null, dateOf(active.startedAt) + " · " + clockOf(active.startedAt)),
-              h("button", { type: "button", className: "dsh-tl-x", "aria-label": "关闭", onClick: function () { setOpenIndex(-1); } }, "×")
+              h("button", { type: "button", className: "dsh-tl-x", "aria-label": t("关闭"), onClick: function () { setOpenIndex(-1); } }, "×")
             ),
             h("div", { className: "dsh-tl-mb" },
               h("aside", { className: "dsh-tl-stats" },
@@ -1709,11 +2011,11 @@ window.__ModuleLoader__.load({
                   ring,
                   h("p", null,
                     h("b", null, (Number.isFinite(before) ? fmt(before) : "—") + " tokens"),
-                    "触发时上下文",
+                    t("触发时上下文"),
                     h("br"),
-                    "触发点阈值 " + (Number.isFinite(threshold) && threshold > 0 ? fmt(threshold) : "—"),
+                    t("触发点阈值 {tokens}", { tokens: (Number.isFinite(threshold) && threshold > 0 ? fmt(threshold) : "—") }),
                     h("br"),
-                    "压缩后 " + (Number.isFinite(after) ? fmt(after) : "—")
+                    t("压缩后 {tokens}", { tokens: (Number.isFinite(after) ? fmt(after) : "—") })
                   )
                 ),
                 h("div", { className: "dsh-tl-rows" },
@@ -1721,11 +2023,11 @@ window.__ModuleLoader__.load({
                     return h("div", { className: "dsh-tl-row", key: row[0] }, h("span", null, row[0]), h("b", null, row[1]));
                   })
                 ),
-                h("p", { className: "dsh-tl-note" }, "字数与时长为插件本地计算；tokens 取 DSH usage 与摘要调用 usage，不额外消耗模型算力。")
+                h("p", { className: "dsh-tl-note" }, t("字数与时长为插件本地计算；tokens 取 DSH usage 与摘要调用 usage，不额外消耗模型算力。"))
               ),
               h("div", { className: "dsh-tl-docwrap" },
                 docTitle(connection, active),
-                h("pre", { className: "dsh-tl-doc" }, String(active.summary || "（本次未记录摘要）"))
+                h("pre", { className: "dsh-tl-doc" }, String(active.summary || t("（本次未记录摘要）")))
               )
             )
           )
@@ -1795,6 +2097,7 @@ window.__ModuleLoader__.load({
      * history sidecar as the gutter chain; the detail reuses the dsh-tl detail
      * classes so both surfaces stay visually identical. */
     function CompactionTabView(props) {
+      useLocaleRevision();
       ensureTimelineStyles();
       ensureCompactionTabStyles();
       var connection = props.connection;
@@ -1865,12 +2168,12 @@ window.__ModuleLoader__.load({
       }, [events.length, index]);
 
       if (!loaded) {
-        return h("div", { className: "dsh-ct-empty" }, h("span", null, "读取压缩记录中…"));
+        return h("div", { className: "dsh-ct-empty" }, h("span", null, t("读取压缩记录中…")));
       }
       if (events.length === 0) {
         return h("div", { className: "dsh-ct-empty" },
-          h("b", null, "还没有压缩记录"),
-          h("span", null, "达到触发点或手动 /compact 后，这里会列出每次压缩的时间、用时与摘要。")
+          h("b", null, t("还没有压缩记录")),
+          h("span", null, t("达到触发点或手动 /compact 后，这里会列出每次压缩的时间、用时与摘要。"))
         );
       }
 
@@ -1894,20 +2197,20 @@ window.__ModuleLoader__.load({
             transform: "rotate(-90 " + ringCenter + " " + ringCenter + ")",
           })
         ),
-        h("figcaption", null, pctValue === null ? "—" : pctValue.toFixed(1) + "%", h("small", null, "占窗口"))
+        h("figcaption", null, pctValue === null ? "—" : pctValue.toFixed(1) + "%", h("small", null, t("占窗口")))
       );
       var rows = [
-        ["压缩用时", durationText(active.durationMs)],
-        ["触发方式", triggerLabel(active.trigger)],
-        ["摘要", wordText(active)],
-        ["摘要输出", Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
-        ["替换历史", (fmt(Number(active.shadowedNodes) || 0) + " 条 / " + fmt(Number(active.shadowedTokens) || 0) + " tokens")],
-        ["模型", [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
+        [t("压缩用时"), durationText(active.durationMs)],
+        [t("触发方式"), triggerLabel(active.trigger)],
+        [t("摘要"), wordText(active)],
+        [t("摘要输出"), Number.isFinite(summaryTokens) ? fmt(summaryTokens) + " tokens" : "—"],
+        [t("替换历史"), tn(Number(active.shadowedNodes) || 0, "1 条 / {tokens} tokens", "{n} 条 / {tokens} tokens", { n: fmt(Number(active.shadowedNodes) || 0), tokens: fmt(Number(active.shadowedTokens) || 0) })],
+        [t("模型"), [active.provider, active.model].filter(Boolean).join(" · ") || "—"],
       ];
 
       var rail = h("aside", { className: "dsh-ct-rail" },
         h("div", { className: "dsh-ct-railhead" },
-          h("span", { className: "dsh-ct-railtitle" }, "压缩事件"),
+          h("span", { className: "dsh-ct-railtitle" }, t("压缩事件")),
           h("span", { className: "dsh-ct-count" }, String(events.length))
         ),
         h("div", { className: "dsh-ct-tape" },
@@ -1918,12 +2221,12 @@ window.__ModuleLoader__.load({
               key: String(event.startedAt || i),
               type: "button",
               className: "dsh-ct-ev" + (i === index ? " on" : ""),
-              title: clockOf(event.startedAt) + " · " + durationText(event.durationMs) + " · " + fmt(chars) + " 字",
+              title: clockOf(event.startedAt) + " · " + durationText(event.durationMs) + " · " + unitText(chars),
               onClick: function () { setSelected(i); },
             },
               h("span", { className: "dsh-ct-time" }, clockOf(event.startedAt)),
               h("span", { className: "dsh-ct-beadwrap" }, h("span", { className: "dsh-ct-bead", style: { width: bead + "px", height: bead + "px" } })),
-              h("span", { className: "dsh-ct-meta" }, durationText(event.durationMs) + " · ", h("b", null, fmt(chars)), " 字")
+              h("span", { className: "dsh-ct-meta" }, durationText(event.durationMs) + " · ", h("b", null, unitText(chars)))
             );
           })
         )
@@ -1931,7 +2234,7 @@ window.__ModuleLoader__.load({
 
       var detail = h("div", { className: "dsh-ct-detail" },
         h("div", { className: "dsh-ct-detailhead" },
-          h("span", { className: "dsh-ct-detailtitle" }, "第 " + String(index + 1) + " 次压缩"),
+          h("span", { className: "dsh-ct-detailtitle" }, t("第 {n} 次压缩", { n: String(index + 1) })),
           h("span", { className: "dsh-ct-stamp" }, dateOf(active.startedAt) + " · " + clockOf(active.startedAt) + " · " + triggerShort(active.trigger))
         ),
         h("div", { className: "dsh-ct-top" },
@@ -1939,11 +2242,11 @@ window.__ModuleLoader__.load({
             ring,
             h("p", null,
               h("b", null, (Number.isFinite(before) ? fmt(before) : "—") + " tokens"),
-              "触发时上下文",
+              t("触发时上下文"),
               h("br"),
-              "触发点阈值 " + (Number.isFinite(threshold) && threshold > 0 ? fmt(threshold) : "—"),
+              t("触发点阈值 {tokens}", { tokens: (Number.isFinite(threshold) && threshold > 0 ? fmt(threshold) : "—") }),
               h("br"),
-              "压缩后 " + (Number.isFinite(after) ? fmt(after) : "—")
+              t("压缩后 {tokens}", { tokens: (Number.isFinite(after) ? fmt(after) : "—") })
             )
           ),
           h("div", { className: "dsh-tl-rows" },
@@ -1953,8 +2256,8 @@ window.__ModuleLoader__.load({
           )
         ),
         docTitle(connection, active),
-        h("pre", { className: "dsh-tl-doc" }, String(active.summary || "（本次未记录摘要）")),
-        h("p", { className: "dsh-tl-note" }, "字数与时长为插件本地计算；tokens 取 DSH usage 与摘要调用 usage，不额外消耗模型算力。")
+        h("pre", { className: "dsh-tl-doc" }, String(active.summary || t("（本次未记录摘要）"))),
+        h("p", { className: "dsh-tl-note" }, t("字数与时长为插件本地计算；tokens 取 DSH usage 与摘要调用 usage，不额外消耗模型算力。"))
       );
 
       return h("div", {
@@ -1965,6 +2268,7 @@ window.__ModuleLoader__.load({
     }
 
     function Section(props) {
+      useLocaleRevision();
       var connection = props.connection;
       var loaded = React.useState(null);
       var settings = loaded[0], setSettings = loaded[1];
@@ -1984,7 +2288,7 @@ window.__ModuleLoader__.load({
       // DSH's answer, not ours, so it is read fresh each time the section opens.
       React.useEffect(function () {
         if (!connection) {
-          setScope({ loading: false, error: "连接服务不可用", value: null });
+          setScope({ loading: false, error: t("连接服务不可用"), value: null });
           return undefined;
         }
         var alive = true;
@@ -2001,7 +2305,7 @@ window.__ModuleLoader__.load({
 
       React.useEffect(function () {
         var alive = true;
-        if (!connection) { setStatus({ loading: false, error: "连接服务不可用", saving: false, saved: false }); return; }
+        if (!connection) { setStatus({ loading: false, error: t("连接服务不可用"), saving: false, saved: false }); return; }
         call(connection, "get").then(function (value) {
           if (!alive) return;
           setSettings(value); setDraft(value);
@@ -2014,8 +2318,8 @@ window.__ModuleLoader__.load({
         return function () { alive = false; };
       }, [connection]);
 
-      if (status.loading) return h("div", { style: { color: C.muted, padding: 18, fontSize: 13 } }, "读取设置中…");
-      if (status.error && !draft) return h("div", { style: { color: "var(--dsw-alias-state-warn-primary, #e0b341)", padding: 18, fontSize: 13, lineHeight: 1.8 } }, "无法读取设置：" + status.error);
+      if (status.loading) return h("div", { style: { color: C.muted, padding: 18, fontSize: 13 } }, t("读取设置中…"));
+      if (status.error && !draft) return h("div", { style: { color: "var(--dsw-alias-state-warn-primary, #e0b341)", padding: 18, fontSize: 13, lineHeight: 1.8 } }, t("无法读取设置：") + status.error);
 
       var base = draft || { enabled: true, thresholdRatio: 0.9, scope: "global", presets: [], templateFile: "", displayStyle: "orbit", timelineStyle: "ember", midTaskEnabled: false, midTaskTriggerTokens: MID_TASK_MIN_TRIGGER, suppressFailureHint: false };
       var enabled = base.enabled !== false;
@@ -2040,12 +2344,12 @@ window.__ModuleLoader__.load({
       var capTrim = capText.trim();
       var capParsed = capTrim === "" ? undefined : (/^\d+$/.test(capTrim) ? Number(capTrim) : NaN);
       var capError = capTrim === "" ? ""
-        : !Number.isInteger(capParsed) ? "请输入整数 tokens。"
-          : capParsed < 8192 ? "最低 8,192 tokens：再小摘要装不下模板小节，会反复触发续写。" : "";
+        : !Number.isInteger(capParsed) ? t("请输入整数 tokens。")
+          : capParsed < 8192 ? t("最低 8,192 tokens：再小摘要装不下模板小节，会反复触发续写。") : "";
       var capValue = capError !== "" || capParsed === undefined || capParsed === capDefault ? undefined : capParsed;
       var capMessage = capError !== "" ? capError
-        : capTrim === "" ? "留空 = 恢复默认 " + fmt(capDefault) + " tokens。"
-          : "下一次压缩生效：单次摘要上限 " + fmt(capParsed) + " tokens。";
+        : capTrim === "" ? t("留空 = 恢复默认 {tokens} tokens。", { tokens: fmt(capDefault) })
+          : t("下一次压缩生效：单次摘要上限 {tokens} tokens。", { tokens: fmt(capParsed) });
 
       /* Only presets the takeover rows reach can be selected; the rest stay
        * native and would be misleading to offer. */
@@ -2097,7 +2401,7 @@ window.__ModuleLoader__.load({
         template: saved !== null && (saved.templateFile || "") !== template,
       };
       var pendingTag = function (on) {
-        return on ? h("span", { "aria-live": "polite", style: pendingStyle }, "（保存后生效）") : null;
+        return on ? h("span", { "aria-live": "polite", style: pendingStyle }, t("（保存后生效）")) : null;
       };
 
       function patch(next) { setDraft(Object.assign({}, base, next)); setStatus({ loading: false, error: "", saving: false, saved: false }); }
@@ -2136,7 +2440,7 @@ window.__ModuleLoader__.load({
       function discard() { setDraft(settings); setCapDraft(null); setStatus({ loading: false, error: "", saving: false, saved: false }); }
       function open(kind) {
         call(connection, "open", { kind: kind, path: template }).then(function () {
-          setStatus({ loading: false, error: "", saving: false, saved: false, note: "已打开" });
+          setStatus({ loading: false, error: "", saving: false, saved: false, note: t("已打开") });
         }).catch(function (error) {
           setStatus({ loading: false, error: String(error && error.message || error), saving: false, saved: false });
         });
@@ -2172,35 +2476,35 @@ window.__ModuleLoader__.load({
 
         h("div", { style: rowStyle },
           h("div", null,
-            h("div", { style: labelStyle }, "启用插件", pendingTag(pending.enabled), !enabled ? h("span", { style: offBadgeStyle }, "已停用") : null),
+            h("div", { style: labelStyle }, t("启用插件"), pendingTag(pending.enabled), !enabled ? h("span", { style: offBadgeStyle }, t("已停用")) : null),
             h("div", { style: subStyle }, enabled
-              ? "达到触发点后，等 agent 空闲时把历史折叠成一份摘要；压缩由本插件接管。"
-              : "关闭后压缩交回 DSH 原生实现：按原生阈值自动折叠，也可继续用 /compact 手动压缩。")
+              ? t("达到触发点后，等 agent 空闲时把历史折叠成一份摘要；压缩由本插件接管。")
+              : t("关闭后压缩交回 DSH 原生实现：按原生阈值自动折叠，也可继续用 /compact 手动压缩。"))
           ),
           h(ToggleSwitch, {
             checked: enabled,
-            label: "启用插件",
+            label: t("启用插件"),
             onChange: function (value) { patch({ enabled: value }); },
           })
         ),
 
         h("div", { style: rowStyle },
           h("div", null,
-            h("div", { style: labelStyle }, "生效范围", pendingTag(pending.scope)),
-            h("div", { style: subStyle }, scopePreset ? "只有勾选的预设由插件压缩，其余预设保持 DSH 自带行为" : "所有能被本插件接入的预设都由插件压缩，共用这份设置")
+            h("div", { style: labelStyle }, t("生效范围"), pendingTag(pending.scope)),
+            h("div", { style: subStyle }, scopePreset ? t("只有勾选的预设由插件压缩，其余预设保持 DSH 自带行为") : t("所有能被本插件接入的预设都由插件压缩，共用这份设置"))
           ),
           h("div", { style: { display: "inline-flex", flex: "0 0 auto", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
-            seg(!scopePreset, "全局", function () { patch({ scope: "global" }); }),
-            seg(scopePreset, "预设", function () { patch({ scope: "preset" }); })
+            seg(!scopePreset, t("全局"), function () { patch({ scope: "global" }); }),
+            seg(scopePreset, t("预设"), function () { patch({ scope: "preset" }); })
           )
         ),
         scopePreset ? h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 0", borderBottom: "1px solid " + C.line } },
           takeable.length === 0
             ? h("span", { style: subStyle }, scope.loading
-              ? "正在向 DSH 读取预设名单…"
+              ? t("正在向 DSH 读取预设名单…")
               : scope.error || (scope.value && scope.value.reason)
-                ? "读取预设名单失败：" + (scope.error || scope.value.reason) + "。重新打开本页会再读一次。"
-                : "本插件还没接入任何预设。重启一次 DSH 会重新接入；仍未出现预设名单说明 DSH 没有返回预设。")
+                ? t("读取预设名单失败：") + (scope.error || scope.value.reason) + t("。重新打开本页会再读一次。")
+                : t("本插件还没接入任何预设。重启一次 DSH 会重新接入；仍未出现预设名单说明 DSH 没有返回预设。"))
             : takeable.map(function (p) {
                 var on = presets.indexOf(p.id) >= 0;
                 return h("button", {
@@ -2211,12 +2515,12 @@ window.__ModuleLoader__.load({
         ) : null,
 
         h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
-          h("div", { style: labelStyle }, "压缩显示方式"),
+          h("div", { style: labelStyle }, t("压缩显示方式")),
 
           h("div", { style: { marginTop: 11, paddingLeft: 15, borderLeft: "2px solid " + C.line } },
 
             h("div", null,
-              h("div", { style: subTitleStyle }, "压缩中样式", pendingTag(pending.display)),
+              h("div", { style: subTitleStyle }, t("压缩中样式"), pendingTag(pending.display)),
               h("div", { style: segRowStyle },
                 DISPLAY_OPTIONS.map(function (option) {
                   var on = themeStyle === option.id;
@@ -2225,7 +2529,7 @@ window.__ModuleLoader__.load({
                     onClick: function () { patch({ displayStyle: option.id }); },
                     "aria-pressed": on ? "true" : "false",
                     style: segButtonStyle(on),
-                  }, h("span", { className: "dsh-handoff-opt dsh-handoff-opt-" + option.id, "aria-hidden": "true" }), option.label);
+                  }, h("span", { className: "dsh-handoff-opt dsh-handoff-opt-" + option.id, "aria-hidden": "true" }), t(option.label));
                 })
               ),
               h(ThemePreview, { theme: themeStyle })
@@ -2233,17 +2537,17 @@ window.__ModuleLoader__.load({
 
             h("div", { style: { marginTop: 18 } },
               h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 } },
-                h("div", { style: subTitleStyle }, "压缩时间线", pendingTag(pending.timeline || pending.position || pending.style)),
+                h("div", { style: subTitleStyle }, t("压缩时间线"), pendingTag(pending.timeline || pending.position || pending.style)),
                 h(ToggleSwitch, {
                   checked: tlEnabled,
-                  label: "压缩时间线",
+                  label: t("压缩时间线"),
                   onChange: function (value) { patch({ timelineEnabled: value }); },
                 })
               ),
               h("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 11, flexWrap: "wrap", opacity: tlEnabled ? 1 : 0.4 } },
-                h("span", { style: { fontSize: 12, color: C.muted, width: 60, flex: "0 0 auto" } }, "显示位置"),
+                h("span", { style: { fontSize: 12, color: C.muted, width: 60, flex: "0 0 auto" } }, t("显示位置")),
                 h("div", { style: { display: "inline-flex", flex: "0 0 auto", border: "1px solid " + C.line, borderRadius: 8, overflow: "hidden" } },
-                  [["chat", "对话区域"], ["tab", "压缩页签"]].map(function (opt) {
+                  [["chat", t("对话区域")], ["tab", t("压缩页签")]].map(function (opt) {
                     var on = tlPosition === opt[0];
                     return h("button", {
                       key: opt[0], type: "button",
@@ -2254,11 +2558,11 @@ window.__ModuleLoader__.load({
                     }, opt[1]);
                   })
                 ),
-                h("span", { style: { fontSize: 11.5, color: C.faint } }, "在「轨迹」之后追加「压缩」页签，不占固定位置")
+                h("span", { style: { fontSize: 11.5, color: C.faint } }, t("在「轨迹」之后追加「压缩」页签，不占固定位置"))
               ),
               h("div", { style: { marginTop: 12, opacity: tlEnabled ? 1 : 0.4 } },
                 h("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6, fontSize: 11, color: C.faint } },
-                  "时间线样式"),
+                  t("时间线样式")),
                 h("div", { style: segRowStyle },
                   TIMELINE_STYLE_OPTIONS.map(function (option) {
                     var on = tlStyle === option.id;
@@ -2268,7 +2572,7 @@ window.__ModuleLoader__.load({
                       onClick: function () { if (tlEnabled) patch({ timelineStyle: option.id }); },
                       "aria-pressed": on ? "true" : "false",
                       style: segButtonStyle(on, !tlEnabled),
-                    }, option.label);
+                    }, t(option.label));
                   })
                 ),
                 h(TimelineStylePreview, { style: tlStyle })
@@ -2280,21 +2584,21 @@ window.__ModuleLoader__.load({
         h("div", { style: { padding: "12px 0", borderBottom: "1px solid " + C.line } },
           h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 } },
             h("div", { style: { flex: "1 1 auto", minWidth: 0 } },
-              h("div", { style: labelStyle }, "任务中途压缩", pendingTag(pending.midTask || pending.midTrigger)),
+              h("div", { style: labelStyle }, t("任务中途压缩"), pendingTag(pending.midTask || pending.midTrigger)),
               h("div", { style: subStyle }, midEnabled
-                ? "每一步开始前测一次余量；低于触发余量就先折叠历史，再继续当前任务。"
-                : "默认关闭：只在任务结束后压缩。开启后每一步开始前测一次余量，不足就先压缩再继续。")
+                ? t("每一步开始前测一次余量；低于触发余量就先折叠历史，再继续当前任务。")
+                : t("默认关闭：只在任务结束后压缩。开启后每一步开始前测一次余量，不足就先压缩再继续。"))
             ),
             h(ToggleSwitch, {
               checked: midEnabled,
-              label: "任务中途压缩",
+              label: t("任务中途压缩"),
               onChange: function (value) { patch({ midTaskEnabled: value }); },
             })
           ),
           midEnabled ? h("div", { style: { marginTop: 11 } },
             h("div", { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", fontSize: 11, color: C.muted, marginBottom: 6 } },
-              h("span", null, "示例窗口 " + fmt(EXAMPLE_WINDOW) + " tokens"),
-              h("span", { style: { color: C.warn, fontWeight: 600 } }, "触发线 · 已用 " + fmt(midUsed))
+              h("span", null, t("示例窗口 {tokens} tokens", { tokens: fmt(EXAMPLE_WINDOW) })),
+              h("span", { style: { color: C.warn, fontWeight: 600 } }, t("触发线 · 已用 {tokens}", { tokens: fmt(midUsed) }))
             ),
             h("div", { style: { position: "relative", display: "flex", height: 24, border: "1px solid " + C.line, borderRadius: 7, overflow: "hidden", background: C.field } },
               h("div", { style: { width: Math.max(0, midUsedPct - midTailPct).toFixed(2) + "%", background: "linear-gradient(90deg, rgba(76,141,255,.20), rgba(76,141,255,.44))", borderRight: "1px solid " + C.accentLine } }),
@@ -2303,10 +2607,10 @@ window.__ModuleLoader__.load({
               h("div", { style: { position: "absolute", top: -3, bottom: -3, left: midUsedPct.toFixed(2) + "%", width: 2, background: C.warn, borderRadius: 1 } })
             ),
             h("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8, fontSize: 10.5, color: C.faint } },
-              h("span", null, "已用 " + fmt(midUsed)),
-              h("span", null, "逐字保留尾部 ≈ " + fmt(Math.round((EXAMPLE_WINDOW - EXAMPLE_RESERVED) * 0.16))),
-              h("span", null, "触发余量 " + fmt(midValue)),
-              h("span", null, "窗口 " + fmt(EXAMPLE_WINDOW))
+              h("span", null, t("已用 {tokens}", { tokens: fmt(midUsed) })),
+              h("span", null, t("逐字保留尾部 ≈ {tokens}", { tokens: fmt(Math.round((EXAMPLE_WINDOW - EXAMPLE_RESERVED) * 0.16)) })),
+              h("span", null, t("触发余量 {tokens}", { tokens: fmt(midValue) })),
+              h("span", null, t("窗口 {tokens}", { tokens: fmt(EXAMPLE_WINDOW) }))
             ),
             h("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 10 } },
               h("input", {
@@ -2315,7 +2619,7 @@ window.__ModuleLoader__.load({
                 max: MID_TASK_EXAMPLE_MAX,
                 step: 1000,
                 value: midValue,
-                "aria-label": "任务中途压缩触发余量",
+                "aria-label": t("任务中途压缩触发余量"),
                 style: { flex: "1 1 auto", maxWidth: 340, accentColor: C.accent },
                 onChange: function (e) { patch({ midTaskTriggerTokens: Number(e.target.value) }); },
               }),
@@ -2325,38 +2629,38 @@ window.__ModuleLoader__.load({
               )
             ),
             h("div", { style: { display: "flex", justifyContent: "space-between", maxWidth: 420, fontSize: 10.5, color: C.faint, marginTop: 2 } },
-              h("span", null, "20,000 最低"),
-              h("span", null, fmt(MID_TASK_EXAMPLE_MAX) + " 窗口一半")
+              h("span", null, t("20,000 最低")),
+              h("span", null, t("{tokens} 窗口一半", { tokens: fmt(MID_TASK_EXAMPLE_MAX) }))
             )
           ) : h("div", { style: { marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(210,153,34,.12)", border: "1px solid rgba(210,153,34,.34)", fontSize: 11.5, color: C.muted, lineHeight: 1.65 } },
-            "只等任务结束再压缩，就可能出现「最后一轮几乎用尽窗口、写摘要反而没有余量」的情况；开启本项可把压缩提前到两步之间。")
+            t("只等任务结束再压缩，就可能出现「最后一轮几乎用尽窗口、写摘要反而没有余量」的情况；开启本项可把压缩提前到两步之间。"))
         ),
 
         h("div", { style: rowStyle },
           h("div", null,
-            h("div", { style: labelStyle }, "压缩失败提示", pendingTag(pending.hint))
+            h("div", { style: labelStyle }, t("压缩失败提示"), pendingTag(pending.hint))
           ),
           h(ToggleSwitch, {
             checked: hintOn,
-            label: "压缩失败提示",
+            label: t("压缩失败提示"),
             onChange: function (value) { patch({ suppressFailureHint: !value }); },
           })
         ),
 
         h("div", { style: rowStyle },
           h("div", null,
-            h("div", { style: labelStyle }, "压缩触发点", pendingTag(pending.ratio)),
-            h("div", { style: subStyle }, "上下文占用达到这个比例后，等当前这轮回答结束再压缩")
+            h("div", { style: labelStyle }, t("压缩触发点"), pendingTag(pending.ratio)),
+            h("div", { style: subStyle }, t("上下文占用达到这个比例后，等当前这轮回答结束再压缩"))
           ),
           h("div", { style: { display: "flex", alignItems: "center", gap: 12 } },
             h("input", {
-              type: "range", min: 0, max: 100, step: 1, value: ratio, "aria-label": "压缩触发点",
+              type: "range", min: 0, max: 100, step: 1, value: ratio, "aria-label": t("压缩触发点"),
               style: { width: 220, accentColor: C.accent },
               onChange: function (e) { patch({ thresholdRatio: snapPercent(e.target.value) / 100 }); },
             }),
             h("div", { style: { display: "flex", alignItems: "center", border: "1px solid " + C.line, borderRadius: 8, background: C.field, height: 32, overflow: "hidden" } },
               h("input", {
-                type: "number", min: 0, max: 100, value: ratio, "aria-label": "压缩触发点百分比",
+                type: "number", min: 0, max: 100, value: ratio, "aria-label": t("压缩触发点百分比"),
                 style: { width: 52, height: 30, border: 0, background: "transparent", color: C.text, textAlign: "right", padding: "0 4px 0 10px", fontSize: 13, outline: "none" },
                 onChange: function (e) {
                   var raw = e.target.value;
@@ -2370,61 +2674,61 @@ window.__ModuleLoader__.load({
         ),
         h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "10px 0", borderBottom: "1px solid " + C.line } },
           h("div", { style: subStyle },
-            "示例：窗口 250K、主回复预留 20K、安全余量 10K → 可用预算 " + fmt(budget) + "；" + ratio + "% ≈ " + fmt(eff) + " tokens" +
-            (capped ? "（已封顶，再往上不会更晚触发）" : "（距输入上限余 " + fmt(budget - eff) + "）")
+            t("示例：窗口 250K、主回复预留 20K、安全余量 10K → 可用预算 {budget}；{ratio}% ≈ {tokens} tokens", { budget: fmt(budget), ratio: ratio, tokens: fmt(eff) }) +
+            (capped ? t("（已封顶，再往上不会更晚触发）") : t("（距输入上限余 {tokens}）", { tokens: fmt(budget - eff) }))
           ),
           h("div", { style: { fontSize: 20, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" } }, ratio + "%")
         ),
 
         h("div", { style: { padding: "14px 0", borderBottom: "1px solid " + C.line } },
-          h("div", { style: labelStyle }, "摘要上限", pendingTag(pending.cap)),
+          h("div", { style: labelStyle }, t("摘要上限"), pendingTag(pending.cap)),
           h("div", { style: Object.assign({}, subStyle, { marginTop: 6, marginBottom: 10 }) },
-            "单次摘要生成的输出上限，默认 " + fmt(capDefault) + " tokens；最低 8,192，留空恢复默认。写到上限后会自动续写或重写，各自独立预算。"),
+            t("单次摘要生成的输出上限，默认 {tokens} tokens；最低 8,192，留空恢复默认。写到上限后会自动续写或重写，各自独立预算。", { tokens: fmt(capDefault) })),
           h("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
             h("div", { style: { display: "flex", alignItems: "center", border: "1px solid " + (capError ? C.error : C.line), borderRadius: 8, background: C.field, height: 34, overflow: "hidden", width: 190 } },
               h("input", {
-                type: "text", inputMode: "numeric", value: capText, "aria-label": "摘要上限 tokens",
+                type: "text", inputMode: "numeric", value: capText, "aria-label": t("摘要上限 tokens"),
                 onChange: function (e) { setCapDraft(e.target.value); },
                 style: { flex: 1, minWidth: 0, border: 0, background: "transparent", color: C.text, padding: "0 10px", fontSize: 13.5, outline: "none", fontFamily: "ui-monospace,Consolas,monospace" },
               }),
               h("span", { style: { color: C.muted, fontSize: 12, padding: "0 9px 0 2px" } }, "tokens")
             ),
-            h("button", { type: "button", style: btnBase, onClick: function () { setCapDraft(String(capDefault)); } }, "恢复默认")
+            h("button", { type: "button", style: btnBase, onClick: function () { setCapDraft(String(capDefault)); } }, t("恢复默认"))
           ),
           h("div", { style: { marginTop: 8, fontSize: 11.5, lineHeight: 1.6, color: capError ? C.error : capTrim === "" ? C.muted : C.ok } }, capMessage)
         ),
 
         h("div", { style: { paddingTop: 14 } },
-          h("div", { style: labelStyle }, "摘要模板", pendingTag(pending.template)),
-          h("div", { style: Object.assign({}, subStyle, { marginBottom: 8 }) }, "压缩时让模型按这份模板写摘要；每次压缩时读取，改完不用重启。此插件模板完全基于 DSH 原生压缩模板的中文翻译版，若需要撤销自己的修改，只需要从磁盘删除该模板文件，然后重启 DSH，模板会自动重建。"),
+          h("div", { style: labelStyle }, t("摘要模板"), pendingTag(pending.template)),
+          h("div", { style: Object.assign({}, subStyle, { marginBottom: 8 }) }, t("压缩时让模型按这份模板写摘要；每次压缩时读取，改完不用重启。此插件模板完全基于 DSH 原生压缩模板的中文翻译版，若需要撤销自己的修改，只需要从磁盘删除该模板文件，然后重启 DSH，模板会自动重建。")),
           h("div", { style: { display: "flex", alignItems: "center", gap: 8, background: C.field, border: "1px solid " + C.line, borderRadius: 8, padding: "7px 10px" } },
             h("input", {
-              value: template, placeholder: defaultTemplate, "aria-label": "模板文件路径",
+              value: template, placeholder: defaultTemplate, "aria-label": t("模板文件路径"),
               onChange: function (e) { patch({ templateFile: e.target.value }); },
               style: { flex: 1, border: 0, background: "transparent", color: C.text, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 12, outline: "none" },
             }),
-            h("button", { type: "button", style: btnBase, onClick: function () { open("file"); } }, "打开文件"),
-            h("button", { type: "button", style: btnBase, onClick: function () { open("folder"); } }, "所在文件夹")
+            h("button", { type: "button", style: btnBase, onClick: function () { open("file"); } }, t("打开文件")),
+            h("button", { type: "button", style: btnBase, onClick: function () { open("folder"); } }, t("所在文件夹"))
           ),
           h("div", { style: { marginTop: 8, fontSize: 11.5, color: C.faint, lineHeight: 1.6 } },
-            "留空使用默认路径；文件不存在时引擎会按内置模板生成一份。")
+            t("留空按界面语言使用默认路径（中文 template.md、英文 template.en.md）；文件不存在时引擎会按内置模板生成一份。"))
         ),
 
         h("div", { style: { marginTop: 14, background: C.panel, border: "1px solid " + C.line, borderRadius: 10, padding: "14px 16px" } },
-          h("div", { style: { fontSize: 12.5, fontWeight: 600, color: C.text, marginBottom: 8 } }, "它是怎么压缩的"),
+          h("div", { style: { fontSize: 12.5, fontWeight: 600, color: C.text, marginBottom: 8 } }, t("它是怎么压缩的")),
           h("ol", { style: { margin: 0, paddingLeft: 18, color: C.muted, fontSize: 12.5, lineHeight: 1.85 } },
-            h("li", null, "到点后不立即动手，等 agent 结束当前回合。"),
-            h("li", null, "写摘要时会复用会话已算过的上下文（命中缓存），不重新全量计算历史。"),
-            h("li", null, "只替换最旧的这一段历史，换成一条摘要；最近约 16% 窗口的原文逐字留着，切点也不会把工具调用和它的结果拆开。"),
-            h("li", null, "下一轮 = 系统提示词 + 工具定义 + 这条摘要 + 那段逐字保留的最近消息；旧消息仍在会话日志里，可用回滚功能恢复。")
+            h("li", null, t("到点后不立即动手，等 agent 结束当前回合。")),
+            h("li", null, t("写摘要时会复用会话已算过的上下文（命中缓存），不重新全量计算历史。")),
+            h("li", null, t("只替换最旧的这一段历史，换成一条摘要；最近约 16% 窗口的原文逐字留着，切点也不会把工具调用和它的结果拆开。")),
+            h("li", null, t("下一轮 = 系统提示词 + 工具定义 + 这条摘要 + 那段逐字保留的最近消息；旧消息仍在会话日志里，可用回滚功能恢复。"))
           ),
-          h("div", { style: { marginTop: 8, fontSize: 11.5, color: C.faint } }, "手动压缩：会话里发送 /compact 可随时折叠一次，不受这个比例限制。")
+          h("div", { style: { marginTop: 8, fontSize: 11.5, color: C.faint } }, t("手动压缩：会话里发送 /compact 可随时折叠一次，不受这个比例限制。"))
         ),
 
         h("div", { style: { display: "flex", alignItems: "center", gap: 10, marginTop: 14 } },
-          h("button", { type: "button", style: dirty && capError === "" ? btnPrimary : Object.assign({}, btnBase, { opacity: 0.55 }), onClick: dirty && capError === "" ? save : undefined }, status.saving ? "保存中…" : "保存"),
-          h("button", { type: "button", style: btnBase, onClick: discard }, "撤销改动"),
-          status.note ? h("span", { style: { fontSize: 12, color: C.ok } }, status.note) : status.saved ? h("span", { style: { fontSize: 12, color: C.ok } }, "已保存，下次判定生效") : null,
+          h("button", { type: "button", style: dirty && capError === "" ? btnPrimary : Object.assign({}, btnBase, { opacity: 0.55 }), onClick: dirty && capError === "" ? save : undefined }, status.saving ? t("保存中…") : t("保存")),
+          h("button", { type: "button", style: btnBase, onClick: discard }, t("撤销改动")),
+          status.note ? h("span", { style: { fontSize: 12, color: C.ok } }, status.note) : status.saved ? h("span", { style: { fontSize: 12, color: C.ok } }, t("已保存，下次判定生效")) : null,
           status.error ? h("span", { style: { fontSize: 12, color: C.error } }, status.error) : null
         )
       );
@@ -2433,6 +2737,44 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       var slots = ctx.slots;
       var connection = ctx.connection;
+      var locale = ctx.locale;
+
+      /* The host owns the language switch. Registering the dictionary keeps the
+       * namespace complete for both built-in locales, `locale: NS` on each slot
+       * makes the host rebuild the surface on a switch, and the publish below
+       * repaints anything already mounted. The node half gets the same value so
+       * it reads the matching summary template. */
+      if (locale !== undefined && locale !== null) {
+        try {
+          // A host without ctx.effect still gets the registration; only the
+          // automatic cleanup on unload is lost.
+          var effect = typeof ctx.effect === "function"
+            ? function (fn) { return ctx.effect(fn); }
+            : function (fn) { return fn(); };
+          var mirrored = "";
+          var syncLocale = function () {
+            var snapshot = typeof locale.getSnapshot === "function" ? locale.getSnapshot() : undefined;
+            var active = publishLocale(snapshot && snapshot.active);
+            if (active !== mirrored) {
+              mirrored = active;
+              if (connection && connection.rpc && typeof connection.rpc.call === "function") {
+                call(connection, "pref", { uiLocale: active }).catch(function () { /* engine keeps the last language */ });
+              }
+            }
+            return active;
+          };
+          if (typeof locale.register === "function") {
+            effect(function () { return locale.register(NS, { zh: mirrorDictionary(), en: EN }); });
+          }
+          if (typeof locale.subscribe === "function") {
+            effect(function () { return locale.subscribe(function () { syncLocale(); }); });
+          }
+          syncLocale();
+        } catch (error) {
+          console.warn("[handoff-ui] locale wiring failed", error);
+        }
+      }
+
       try { loadDocFontSize(connection); } catch (error) { /* keep the default size */ }
 
       try {
@@ -2441,7 +2783,8 @@ window.__ModuleLoader__.load({
             name: "settings.section",
             id: "auto-compaction",
             order: 14,
-            label: function () { return "会话压缩"; },
+            label: function () { return t("会话压缩"); },
+            locale: NS,
             inject: function () { return {}; },
           }, function SectionView() { return h(Section, { connection: connection }); });
         });
@@ -2472,6 +2815,7 @@ window.__ModuleLoader__.load({
             name: "conversation.input.dock",
             id: "auto-compaction-status",
             order: 10,
+            locale: NS,
             inject: function (sessionId) {
               return { sessionId: sessionId, cancel: cancelFor(sessionId) };
             },
@@ -2509,7 +2853,8 @@ window.__ModuleLoader__.load({
                 // Appended after the existing tabs (chat 0, trajectory 10, …),
                 // never a fixed slot index, so other plugins' tabs keep their place.
                 order: 1000,
-                label: function () { return "压缩"; },
+                label: function () { return t("压缩"); },
+                locale: NS,
                 inject: function (sessionId) { return { sessionId: sessionId }; },
               }, function CompactionView(slotProps) {
                 return h(CompactionTabView, { connection: connection, sessionId: slotProps.sessionId });

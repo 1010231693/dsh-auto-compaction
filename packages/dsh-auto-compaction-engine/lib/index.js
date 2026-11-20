@@ -53,7 +53,11 @@ const SETTINGS_DIR = join(homedir(), ".dsh-handoff-compaction");
 // Test harnesses point this at a missing file so the live sidecar cannot leak
 // into a case that expects the configured ratio.
 const SETTINGS_FILE = process.env.DSH_HANDOFF_SETTINGS_FILE ?? join(SETTINGS_DIR, "settings.json");
-const DEFAULT_TEMPLATE_FILE = join(SETTINGS_DIR, "template.md");
+// One template file per UI language: `template.md` stays the Chinese one so an
+// existing customised file keeps working, `template.en.md` is its English twin.
+const TEMPLATE_DIR = process.env.DSH_HANDOFF_TEMPLATE_DIR ?? SETTINGS_DIR;
+const DEFAULT_TEMPLATE_FILE = join(TEMPLATE_DIR, "template.md");
+const DEFAULT_TEMPLATE_FILE_EN = join(TEMPLATE_DIR, "template.en.md");
 /**
  * Trace goes to the standard sidecar unless a row says otherwise. Generated
  * takeover rows carry no path of their own, so defaulting here is what keeps
@@ -78,21 +82,48 @@ function readSettings() {
   }
 }
 
-function templatePathFrom(configured) {
+/**
+ * UI language the client half reports into settings.json (`uiLocale`). The
+ * engine lives in its own preset realm and never sees `ctx.locale`, so the
+ * client is the only source; anything unknown falls back to Chinese, which is
+ * what every install had before the switch existed.
+ */
+function normalizeLocale(value) {
+  const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return text.startsWith("en") ? "en" : "zh";
+}
+
+function uiLocale() {
+  return normalizeLocale(readSettings()?.uiLocale);
+}
+
+/** An explicitly configured template path applies to every locale. */
+function configuredTemplatePath(configured) {
   if (typeof configured === "string" && configured.trim().length > 0) return configured.trim();
   const env = process.env.DSH_HANDOFF_TEMPLATE;
   if (typeof env === "string" && env.trim().length > 0) return env.trim();
-  return DEFAULT_TEMPLATE_FILE;
+  return undefined;
+}
+
+/** Chinese and English built-in instructions, same structure, same order. */
+function builtinInstruction(locale) {
+  return locale === "en" ? BUILTIN_INSTRUCTION_EN : BUILTIN_INSTRUCTION;
+}
+
+function templateFileFor(configured, locale) {
+  if (configured !== undefined) return configured;
+  return locale === "en" ? DEFAULT_TEMPLATE_FILE_EN : DEFAULT_TEMPLATE_FILE;
 }
 
 /** Read the handoff template, falling back to the built-in text. */
-function readTemplate(filePath, autoCreate) {
+function readTemplate(filePath, autoCreate, builtin) {
+  const fallback = typeof builtin === "string" ? builtin : BUILTIN_INSTRUCTION;
   try {
     if (!existsSync(filePath)) {
       if (!autoCreate) return { text: undefined, source: "builtin (file missing)" };
       mkdirSync(join(filePath, ".."), { recursive: true });
-      writeFileSync(filePath, BUILTIN_INSTRUCTION + "\n", "utf8");
-      return { text: BUILTIN_INSTRUCTION, source: "builtin (written to " + filePath + ")" };
+      writeFileSync(filePath, fallback + "\n", "utf8");
+      return { text: fallback, source: "builtin (written to " + filePath + ")" };
     }
     const text = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
     if (text.trim().length < 20) return { text: undefined, source: "builtin (file empty)" };
@@ -138,6 +169,48 @@ const BUILTIN_INSTRUCTION = [
   "- 不要提到本摘要请求，也不要说上下文被压缩过。",
   "- 只输出检查点正文：不要调用任何工具，也不要执行任何其他动作。",
   "- 如果对话里已经含有 <compacted-summary> 块，那是一份 PRIOR 检查点。不要把它逐字抄到新的摘要里：保留仍然成立的事实，删掉过时的，并把更新的信息按同样的结构合并进这一份摘要。",
+].join("\n");
+
+/**
+ * The English twin: DSH's own compaction instruction, word for word. The
+ * Chinese one above is its translation, so keeping the original here means an
+ * English installation gets exactly what the stock engine would have asked for.
+ */
+const BUILTIN_INSTRUCTION_EN = [
+  "You are now acting as a compaction engine for this AI coding assistant. Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.",
+  "",
+  'Output EXACTLY the Markdown structure below: keep every section, in order. Use terse bullets, not prose paragraphs. Write "(none)" for an empty section — never drop a section.',
+  "",
+  "## Primary Request and Intent",
+  "- [the user's original and evolving goals; quote verbatim where the exact wording matters]",
+  "",
+  "## Key Technical Concepts",
+  "- [technologies, frameworks, patterns, and conventions in play]",
+  "",
+  "## Files and Code",
+  "- [exact path: why it matters, key changes or snippets]",
+  "",
+  "## Errors and Fixes",
+  "- [error: how it was resolved, plus any related user feedback]",
+  "",
+  "## Pending Jobs",
+  "- [explicitly requested work not yet completed]",
+  "",
+  "## Current Work",
+  "- [precisely what was in progress at this checkpoint]",
+  "",
+  "## Next Step",
+  '- [the single next action, directly in line with the most recent request, or "(none)"]',
+  "",
+  "## Critical Context",
+  "- [decisions and their rationale, constraints, user preferences, open questions, data needed to continue]",
+  "",
+  "Rules:",
+  "- Write concise English engineering prose. Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.",
+  "- Capture user feedback and explicit instructions faithfully, especially corrections.",
+  "- Do NOT mention this summarization request or that the context was compacted.",
+  "- Output only the checkpoint text: do not call any tool or take any other action.",
+  "- If the conversation already contains a <compacted-summary> block, it is a PRIOR checkpoint. Do not copy it forward verbatim: preserve still-true facts, drop stale ones, and merge newer information into a single consolidated summary under the same structure.",
 ].join("\n");
 
 function finishError(finish) {
@@ -317,14 +390,18 @@ export default class HandoffCompaction extends BasicCompactionEngine {
       minTokenGrowth: minTokenGrowth ?? 2_048,
       timeoutMs: timeoutMs ?? 600_000,
       dryRun: dryRun ?? false,
-      templateFile: templatePathFrom(templateFile ?? readSettings()?.templateFile),
+      templateFile: configuredTemplatePath(templateFile ?? readSettings()?.templateFile),
       presetId: typeof presetId === "string" ? presetId : "",
       autoCreateTemplate: autoCreateTemplate !== false,
     };
     this.handoff.traceFile = typeof traceFile === "string" ? traceFile : DEFAULT_TRACE_FILE;
     this.handoff.traceConsole = traceConsole === true;
-    // Materialise the template so the settings card can point at a real file.
-    try { readTemplate(this.handoff.templateFile, this.handoff.autoCreateTemplate); } catch { /* never block construction */ }
+    // Materialise the template for the language in use, so the settings card can
+    // point at a real file; the other language's file is created on first use.
+    try {
+      const locale = uiLocale();
+      readTemplate(templateFileFor(this.handoff.templateFile, locale), this.handoff.autoCreateTemplate, builtinInstruction(locale));
+    } catch { /* never block construction */ }
     this.attempts = new WeakMap();
     this.running = new WeakSet();
     this.timers = new WeakMap();
@@ -920,13 +997,18 @@ export default class HandoffCompaction extends BasicCompactionEngine {
     const sameTarget = latest !== undefined && target.provider === latest.provider && target.model === latest.model;
     const reasoningEffort = sameTarget ? latest.reasoningEffort : undefined;
 
+    // The template follows the UI language the client reports: one file per
+    // language, and the built-in fallback matches it, so a fresh English
+    // install writes template.en.md instead of handing the model Chinese.
+    const locale = uiLocale();
+    const builtin = builtinInstruction(locale);
     const resolved = this.handoff.instruction === undefined
-      ? readTemplate(this.handoff.templateFile, this.handoff.autoCreateTemplate)
+      ? readTemplate(templateFileFor(this.handoff.templateFile, locale), this.handoff.autoCreateTemplate, builtin)
       : { text: this.handoff.instruction, source: "config handoffInstruction" };
     const instruction = typeof resolved.text === "string" && resolved.text.trim().length > 0
       ? resolved.text
-      : BUILTIN_INSTRUCTION;
-    this.log(`template: ${resolved.source}${resolved.text === undefined ? " (fallback)" : ""}`);
+      : builtin;
+    this.log(`template: ${resolved.source}${resolved.text === undefined ? " (fallback)" : ""} [${locale}]`);
     const maxTokens = this.summaryMaxTokens();
     this.log(`summary cap ${maxTokens} tokens`);
 
@@ -980,13 +1062,13 @@ export default class HandoffCompaction extends BasicCompactionEngine {
           ? [
             ...baseMessages,
             Object.freeze({ role: "assistant", content: [{ type: "text", text: combined }] }),
-            Object.freeze({ role: "user", content: [{ type: "text", text: continuationInstruction(validation) }] }),
+            Object.freeze({ role: "user", content: [{ type: "text", text: continuationInstruction(validation, locale) }] }),
           ]
           : [
             ...baseMessages,
             Object.freeze({
               role: "user",
-              content: [{ type: "text", text: rewriteInstruction(validation, maxTokens) }],
+              content: [{ type: "text", text: rewriteInstruction(validation, maxTokens, locale) }],
             }),
           ];
 

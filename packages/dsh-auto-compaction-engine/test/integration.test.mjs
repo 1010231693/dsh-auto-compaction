@@ -73,6 +73,9 @@ write(TWO_SECTION_TEMPLATE, "## 用户目标与原始要求\n\n## 当前任务�
 const FLAT_TEMPLATE = path.join(SANDBOX, "template-flat.md");
 write(FLAT_TEMPLATE, "写一份交接文档，供下一轮继续。只输出正文，不要调用工具，也不要执行任何其他动作。\n");
 process.env.DSH_HANDOFF_SETTINGS_FILE = path.join(SANDBOX, "settings-missing.json");
+// One template directory per run: the engine writes template.md / template.en.md
+// into it, and a test must never touch the developer's real templates.
+process.env.DSH_HANDOFF_TEMPLATE_DIR = path.join(SANDBOX, "templates");
 process.env.DSH_HANDOFF_TEMPLATE = TEMPLATE;
 process.env.DSH_HANDOFF_STATUS_DIR = path.join(SANDBOX, "status");
 process.env.DSH_HANDOFF_HISTORY_DIR = path.join(SANDBOX, "history");
@@ -176,8 +179,7 @@ test("summarize replays the prefix and appends the handoff instruction", async (
   if (!Array.isArray(result.summary) || result.provider !== "qwen") throw new Error("bad summarize result");
 });
 
-test("summarize forwards the routed reasoning effort", async () => {
-  const ctx = makeCtx({ totalTokens: 0 });
+test("summarize forwards the routed reasoning effort", async () => {  const ctx = makeCtx({ totalTokens: 0 });
   const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000, dryRun: true });
   let seen;
   ctx.llm.stream = async function* (options) { seen = options; yield { text: "## ok\n- done" }; };
@@ -605,6 +607,87 @@ test("midtask: a later compaction clears the stale hint", async () => {
   const status = readLiveStatus();
   if (status.phase !== "done") throw new Error("status: " + JSON.stringify(status));
   if (status.failureHint) throw new Error("hint not cleared: " + JSON.stringify(status.failureHint));
+});
+
+/* ---- UI language picks the template ---- */
+
+/* The gate requires every section the template names, so the fake answers carry
+ * the full structure of whichever language is in play. */
+const ENGLISH_SUMMARY = [
+  "## Primary Request and Intent", "- ok",
+  "## Key Technical Concepts", "- ok",
+  "## Files and Code", "- ok",
+  "## Errors and Fixes", "- ok",
+  "## Pending Jobs", "- ok",
+  "## Current Work", "- ok",
+  "## Next Step", "- ok",
+  "## Critical Context", "- ok",
+].join("\n");
+const CHINESE_SUMMARY = [
+  "## 用户主要请求与意图", "- ok",
+  "## 关键技术概念", "- ok",
+  "## 文件与代码", "- ok",
+  "## 报错与修复", "- ok",
+  "## 未完成的任务", "- ok",
+  "## 当前工作", "- ok",
+  "## 下一步", "- ok",
+  "## 关键上下文", "- ok",
+].join("\n");
+
+test("an English UI writes and reads template.en.md", async () => {
+  const templates = path.join(SANDBOX, "templates");
+  fs.rmSync(templates, { recursive: true, force: true });
+  writeLiveSettings({ uiLocale: "en" });
+  // The harness pins DSH_HANDOFF_TEMPLATE for every other case; this one is
+  // about the language default, so the explicit path has to step aside.
+  const pinned = process.env.DSH_HANDOFF_TEMPLATE;
+  delete process.env.DSH_HANDOFF_TEMPLATE;
+  try {
+    const ctx = makeCtx({ totalTokens: 0 });
+    const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000, dryRun: true, maxTokens: 4096 });
+    let seen;
+    ctx.llm.stream = async function* (options) {
+      seen = options;
+      yield { text: ENGLISH_SUMMARY };
+    };
+    await plugin.summarize({ messages: [{ role: "user", content: "OLD" }] }, makeAgent());
+    const tail = seen.messages.at(-1).content[0].text;
+    if (!tail.includes("## Primary Request and Intent")) throw new Error("English template not used");
+    if (tail.includes("用户主要请求与意图")) throw new Error("Chinese template leaked into an English install");
+    // The rule the user asked to flip: English prose, not Chinese prose.
+    if (!tail.includes("Write concise English engineering prose")) throw new Error("English prose rule missing");
+    if (!fs.existsSync(path.join(templates, "template.en.md"))) throw new Error("template.en.md not materialised");
+    if (fs.existsSync(path.join(templates, "template.md"))) throw new Error("Chinese template written for an English install");
+  } finally {
+    process.env.DSH_HANDOFF_TEMPLATE = pinned;
+    fs.rmSync(SETTINGS, { force: true });
+  }
+});
+
+test("switching language mid-session swaps the template without a restart", async () => {
+  fs.rmSync(path.join(SANDBOX, "templates"), { recursive: true, force: true });
+  writeLiveSettings({ uiLocale: "zh" });
+  const pinned = process.env.DSH_HANDOFF_TEMPLATE;
+  delete process.env.DSH_HANDOFF_TEMPLATE;
+  try {
+    const ctx = makeCtx({ totalTokens: 0 });
+    const plugin = new HandoffCompaction(ctx, { contextWindowOverride: 40_000, dryRun: true, maxTokens: 4096 });
+    const tails = [];
+    const answer = (text) => async function* (options) {
+      tails.push(options.messages.at(-1).content[0].text);
+      yield { text };
+    };
+    ctx.llm.stream = answer(CHINESE_SUMMARY);
+    await plugin.summarize({ messages: [{ role: "user", content: "OLD" }] }, makeAgent());
+    writeLiveSettings({ uiLocale: "en" });
+    ctx.llm.stream = answer(ENGLISH_SUMMARY);
+    await plugin.summarize({ messages: [{ role: "user", content: "OLD" }] }, makeAgent());
+    if (!tails[0].includes("用户主要请求与意图")) throw new Error("first call was not Chinese");
+    if (!tails[1].includes("Primary Request and Intent")) throw new Error("second call did not switch to English");
+  } finally {
+    process.env.DSH_HANDOFF_TEMPLATE = pinned;
+    fs.rmSync(SETTINGS, { force: true });
+  }
 });
 
 fs.rmSync(SETTINGS, { force: true });
