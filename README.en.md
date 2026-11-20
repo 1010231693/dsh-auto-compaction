@@ -27,9 +27,7 @@
 
 ## Changelog
 
-- **0.5.0**: the UI follows DSH's language setting. Switch DSH to English and the settings page, compaction status, timeline, both compaction views and the failure dialog all become English — no restart, no separate switch; switch back to Chinese and it is Chinese again.
-  - The summary template is per language too: `template.md` for Chinese, `template.en.md` for English (its content is DSH's own English instruction, so the hardcoded "write concise Chinese engineering prose" rule becomes `Write concise English engineering prose`). Continuation/rewrite prompts and the truncation markers follow the same language.
-  - In English, times use the 12-hour clock (`9:38 PM`) and durations read `1 min 01 s`; the timeline counts English words only, while Chinese keeps "CJK characters + English words".
+- **0.5.0**: the plugin UI now follows an English DSH interface, and the summary template follows the language too.
 - **0.4.0**: five looks for the compaction timeline, switchable in settings with a live preview: ember ticks (default, beads before the time like a log rail), capsule flow (newest one solid orange, largest click target), phase rings (arc length = share of the window at trigger), quiet ticks (only the rail, ticks and time; hover for duration and length), proportional bars (bar length = context share at trigger, summary length on the right). The settings section became one top-level heading with two parallel sub-sections. Also fixed preview/real-timeline mismatch, capsule overflow and scattered unsaved-field markers.
 - **0.3.1**: "Trigger" in the detail view now distinguishes manual `/compact`, automatic (idle) and automatic (mid-task) instead of mislabelling mid-task as idle; − / + font-size buttons for the summary (10–24px, default 12px, persisted); the bead chain no longer caps at 420px and uses the full available height, so dozens of compactions no longer collapse the spacing early; UI copy unified on "summary".
 
